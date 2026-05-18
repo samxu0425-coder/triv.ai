@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}TriviaAI - Play{% endblock %}
+
+{% block content %}
+<div class="welcome-card">
+    <h1>TriviaAI</h1>
+    <p>AI-powered trivia for everyone</p>
+
+    {% if session.user_id %}
+        <p class="subtitle">Playing as <strong>{{ session.display_name }}</strong></p>
+        <div class="btn-group">
+            <a href="#" class="btn">Create Game</a>
+            <a href="#" class="btn btn-secondary">Join Game</a>
+        </div>
+    {% else %}
+        <div class="btn-group">
+            <a href="#" class="btn btn-secondary">Join as Guest</a>
+            <a href="{{ url_for('login') }}" class="btn">Log In to Host</a>
+        </div>
+        <div class="text-center mt-3">
+            <p>New here? <a href="{{ url_for('register') }}">Create an account</a> to host games and track your scores.</p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

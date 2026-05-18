@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Sign Up - triv.ai{% endblock %}
+
+{% block content %}
+<div class="text-center">
+    <h2>Create Account</h2>
+</div>
+
+<form method="POST">
+    <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autocomplete="username"
+               placeholder="Used to log in">
+    </div>
+
+    <div class="form-group">
+        <label for="display_name">Display Name</label>
+        <input type="text" id="display_name" name="display_name" required
+               placeholder="Shown to other players">
+    </div>
+
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required autocomplete="email">
+    </div>
+
+    <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="new-password"
+               minlength="6">
+    </div>
+
+    <div class="form-group">
+        <label for="confirm_password">Confirm Password</label>
+        <input type="password" id="confirm_password" name="confirm_password" required
+               autocomplete="new-password">
+    </div>
+
+    <button type="submit" class="btn">Create Account</button>
+
+    <div class="text-center mt-3">
+        <p>Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+    </div>
+</form>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}triv.ai - AI-Powered Trivia Games{% endblock %}
+
+{% block body_content %}
+<div class="landing-page">
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1 class="hero-title">The Next Generation of Trivia.</h1>
+            <p class="hero-sub">Choose a subject. AI writes the questions. Play with anyone, anywhere.</p>
+            <div class="hero-buttons">
+                {% if session.user_id %}
+                    <a href="{{ url_for('play') }}" class="btn-cta">Go to Game</a>
+                {% else %}
+                    <a href="{{ url_for('register') }}" class="btn-cta">Get Started Free</a>
+                    <a href="{{ url_for('login') }}" class="btn-cta-outline">Log In</a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="how-it-works">
+        <div class="section-inner animate-on-scroll">
+            <h2 class="section-title">How It Works</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
+                    </div>
+                    <h3>Add Your Material</h3>
+                    <p>Type a topic, paste text, or upload a document. Anything works: a video, a textbook chapter, your company's onboarding guide.</p>
+                </div>
+                <div class="step">
+                    <div class="step-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-1 3.5-3.5 5.5-7.5 6.5 4 1 6.5 3 7.5 7.5 1-4.5 3.5-6.5 7.5-7.5-4-1-6.5-3-7.5-6.5z"/><path d="M5 3v3"/><path d="M3.5 4.5h3"/><path d="M19 18v3"/><path d="M17.5 19.5h3"/></svg>
+                    </div>
+                    <h3>AI Writes the Quiz</h3>
+                    <p>AI models generates structured questions instantly. Or skip and write your own questions from scratch.</p>
+                </div>
+                <div class="step">
+                    <div class="step-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <h3>Play with Friends</h3>
+                    <p>Share a room code. Everyone answers live and the leaderboard updates in real time.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features">
+        <div class="section-inner animate-on-scroll">
+            <h2 class="section-title">Everything You Need</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg></div>
+                    <h3>AI Question Generation</h3>
+                    <p>Never write a question again. Paste any topic or text and get a full quiz in seconds.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></div>
+                    <h3>Three Question Types</h3>
+                    <p>Multiple choice, multi-select, and free-response questions graded by AI.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg></div>
+                    <h3>Live Leaderboard</h3>
+                    <p>Scores update after every question. Speed bonuses keep everyone on their toes.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg></div>
+                    <h3>Join as a Guest</h3>
+                    <p>Players don't need an account. Just share a room code and they're in.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Bottom CTA -->
+    <section class="bottom-cta">
+        <div class="section-inner animate-on-scroll">
+            <h2>Ready to play?</h2>
+            <p>Create an account to host games. Players can always join as guests.</p>
+            <div class="hero-buttons">
+                <a href="{{ url_for('register') }}" class="btn-cta">Create an Account</a>
+                <a href="{{ url_for('play') }}" class="btn-cta-outline">Join a Game</a>
+            </div>
+        </div>
+    </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+            }
+        });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.animate-on-scroll').forEach(el => observer.observe(el));
+</script>
+{% endblock %}
