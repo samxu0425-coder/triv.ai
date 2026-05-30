@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+
+{% block title %}Game {{ room.code }} - triv.ai{% endblock %}
+
+{% block body_content %}
+<div class="game-page" id="gamePage">
+
+  <!-- Header bar -->
+  <div class="game-header">
+    <div class="game-header-left">
+      <span class="game-logo">triv.ai</span>
+      <span class="game-room-pill">{{ room.code }}</span>
+    </div>
+    <div class="game-header-center">
+      Q <span id="qNum">1</span> <span class="q-sep">/</span> <span id="qTotal">{{ room.questions|length }}</span>
+    </div>
+    <div class="game-header-right">
+      <div class="game-timer" id="timer">20</div>
+    </div>
+  </div>
+
+  <!-- Body: question + scoreboard -->
+  <div class="game-body">
+
+    <!-- Question column -->
+    <div class="game-question-area">
+      <p class="game-status-bar" id="statusBar">Get ready...</p>
+      <h2 class="game-question-text" id="questionText">Loading question...</h2>
+
+      <!-- MCQ buttons -->
+      <div class="game-choices" id="mcqChoices" style="display:none"></div>
+
+      <!-- Multi-select checkboxes -->
+      <div class="game-choices" id="multiChoices" style="display:none"></div>
+      <button class="multi-submit-btn" id="multiSubmit" style="display:none" onclick="submitMulti()">Lock In Answer</button>
+
+      <!-- FRQ input -->
+      <div class="frq-area" id="frqArea" style="display:none">
+        <input type="text" class="frq-input" id="frqInput" placeholder="Type your answer..." autocomplete="off">
+        <button class="frq-submit-btn" id="frqSubmit">Submit</button>
+      </div>
+
+      <!-- Feedback strip -->
+      <div class="answer-feedback" id="answerFeedback" style="display:none"></div>
+    </div>
+
+    <!-- Scoreboard column -->
+    <div class="game-scoreboard">
+      <p class="scoreboard-title">Leaderboard</p>
+      <div class="scoreboard-list" id="scoreList"></div>
+    </div>
+
+  </div>
+
+  <!-- Host controls (always visible to host) -->
+  {% if is_host %}
+  <div class="host-controls" id="hostControls">
+    <button class="skip-btn" id="skipBtn" onclick="skipToAnswer()">Skip to Answer</button>
+    <button class="next-btn" id="nextBtn" onclick="advanceQuestion()" style="display:none">Next Question</button>
+    <button class="end-early-btn" id="endEarlyBtn" onclick="endEarly()">End Game</button>
+  </div>
+  {% endif %}
+
+  <!-- End-game overlay -->
+  <div class="end-overlay" id="endOverlay" style="display:none">
+    <div class="end-card">
+      <div class="end-trophy">&#127942;</div>
+      <h2 class="end-title">Game Over!</h2>
+      <div class="end-scores" id="endScores"></div>
+      <div class="end-actions">
+        <a href="/play" class="end-btn">Play Again</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const ROOM_CODE = "{{ room.code }}";
+  const IS_HOST   = {{ 'true' if is_host else 'false' }};
+  const MY_ID     = "{{ player_id }}";
+
+  let lastQIndex  = -1;
+  let answered    = false;
+  let selectedMulti = new Set();
+  let pollId;
+
+  // ── Polling ───────────────────────────────────────────────
+  pollId = setInterval(pollState, 1000);
+  pollState();
+
+  async function pollState() {
+    try {
+      const res = await fetch(`/api/room/${ROOM_CODE}/state`);
+      const state = await res.json();
+      render(state);
+    } catch (e) { /* network blip — ignore */ }
+  }
+
+  // ── Main render ───────────────────────────────────────────
+  function render(state) {
+    if (state.status === 'ended') { showEnd(state); return; }
+    if (state.status === 'lobby') { location.href = `/room/${ROOM_CODE}/lobby`; return; }
+
+    const q = state.question;
+    if (!q) return;
+
+    // Progress + timer
+    document.getElementById('qNum').textContent   = state.current_q + 1;
+    document.getElementById('qTotal').textContent = state.total_q;
+
+    const timerEl = document.getElementById('timer');
+    timerEl.textContent = state.time_left;
+    timerEl.className = 'game-timer' + (state.time_left <= 5 ? ' timer-urgent' : '');
+
+    // Status bar
+    document.getElementById('statusBar').textContent =
+      `${state.answers_in} / ${state.total_players} answered`;
+
+    // New question came in — reset UI
+    if (state.current_q !== lastQIndex) {
+      lastQIndex = state.current_q;
+      answered   = !!state.my_answer;
+      selectedMulti = new Set();
+      resetUI();
+      document.getElementById('questionText').textContent = q.text;
+      if (!answered) buildChoices(q);
+    }
+
+    // Reveal phase
+    if (state.revealed) {
+      if (document.getElementById('answerFeedback').style.display === 'none') {
+        revealAnswer(q, state.my_answer);
+      }
+      if (IS_HOST) {
+        document.getElementById('skipBtn').style.display = 'none';
+        const nextBtn = document.getElementById('nextBtn');
+        nextBtn.style.display = 'inline-flex';
+        nextBtn.textContent = state.current_q + 1 >= state.total_q ? 'End Game' : 'Next Question';
+      }
+    } else {
+      if (IS_HOST) {
+        document.getElementById('skipBtn').style.display = 'inline-flex';
+        document.getElementById('nextBtn').style.display = 'none';
+      }
+    }
+
+    renderScores(state.scores);
+  }
+
+  // ── Reset UI between questions ────────────────────────────
+  function resetUI() {
+    ['mcqChoices','multiChoices'].forEach(id => {
+      const el = document.getElementById(id);
+      el.style.display = 'none';
+      el.innerHTML = '';
+    });
+    document.getElementById('multiSubmit').style.display = 'none';
+    document.getElementById('frqArea').style.display    = 'none';
+    document.getElementById('frqInput').value           = '';
+    document.getElementById('frqInput').disabled        = false;
+    document.getElementById('frqSubmit').disabled       = false;
+    document.getElementById('answerFeedback').style.display = 'none';
+    if (IS_HOST) {
+      document.getElementById('skipBtn').style.display = 'inline-flex';
+      document.getElementById('nextBtn').style.display = 'none';
+    }
+  }
+
+  // ── Build answer inputs ───────────────────────────────────
+  const LABELS = ['A','B','C','D'];
+
+  function buildChoices(q) {
+    if (q.type === 'mcq') {
+      const el = document.getElementById('mcqChoices');
+      q.choices.forEach((c, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'choice-btn';
+        btn.innerHTML = `<span class="choice-label">${LABELS[i]}</span><span>${c}</span>`;
+        if (IS_HOST) {
+          btn.disabled = true;
+          btn.classList.add('host-view');
+        } else {
+          btn.onclick = () => submitAnswer(c);
+        }
+        el.appendChild(btn);
+      });
+      el.style.display = 'grid';
+
+    } else if (q.type === 'multi') {
+      const el = document.getElementById('multiChoices');
+      q.choices.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'multi-choice-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.value = c;
+        if (IS_HOST) {
+          cb.disabled = true;
+        } else {
+          cb.addEventListener('change', e => {
+            e.target.checked ? selectedMulti.add(c) : selectedMulti.delete(c);
+          });
+        }
+        const lbl = document.createElement('label');
+        lbl.appendChild(cb);
+        lbl.append(' ' + c);
+        div.appendChild(lbl);
+        el.appendChild(div);
+      });
+      el.style.display = 'grid';
+      if (!IS_HOST) document.getElementById('multiSubmit').style.display = 'block';
+
+    } else if (q.type === 'frq') {
+      if (!IS_HOST) document.getElementById('frqArea').style.display = 'flex';
+    }
+  }
+
+  // ── Reveal correct answer ─────────────────────────────────
+  function revealAnswer(q, myAnswer) {
+    const fb = document.getElementById('answerFeedback');
+
+    if (q.type === 'mcq') {
+      const el = document.getElementById('mcqChoices');
+      // Build choices if they haven't been built yet (player never answered)
+      if (el.children.length === 0) {
+        q.choices.forEach((c, i) => {
+          const btn = document.createElement('button');
+          btn.className = 'choice-btn';
+          btn.innerHTML = `<span class="choice-label">${LABELS[i]}</span><span>${c}</span>`;
+          btn.disabled = true;
+          el.appendChild(btn);
+        });
+        el.style.display = 'grid';
+      }
+      Array.from(el.children).forEach(btn => {
+        btn.disabled = true;
+        const text = btn.querySelector('span:last-child').textContent;
+        if (text === q.answer)           btn.classList.add('choice-correct');
+        else if (myAnswer && text === myAnswer) btn.classList.add('choice-wrong');
+      });
+      if (myAnswer) {
+        const ok = myAnswer === q.answer;
+        fb.textContent  = ok ? '✓ Correct!' : '✗ Wrong!';
+        fb.className    = 'answer-feedback ' + (ok ? 'fb-correct' : 'fb-wrong');
+      } else {
+        fb.textContent  = "Time's up!";
+        fb.className    = 'answer-feedback fb-wrong';
+      }
+      fb.style.display = 'block';
+
+    } else if (q.type === 'multi') {
+      document.getElementById('multiSubmit').style.display = 'none';
+      const correct = Array.isArray(q.answer) ? q.answer.join(', ') : q.answer;
+      fb.textContent  = `Correct: ${correct}`;
+      fb.className    = 'answer-feedback fb-correct';
+      fb.style.display = 'block';
+
+    } else if (q.type === 'frq') {
+      document.getElementById('frqArea').style.display = 'none';
+      fb.textContent  = `Answer: ${q.answer}`;
+      fb.className    = 'answer-feedback fb-correct';
+      fb.style.display = 'block';
+    }
+  }
+
+  // ── Answer submission ─────────────────────────────────────
+  async function submitAnswer(answer) {
+    if (answered) return;
+    answered = true;
+    document.querySelectorAll('.choice-btn').forEach(b => b.disabled = true);
+    document.getElementById('multiSubmit').style.display = 'none';
+
+    try {
+      const res = await fetch(`/room/${ROOM_CODE}/answer`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({answer}),
+      });
+      const data = await res.json();
+      if (data.points !== undefined) {
+        const fb = document.getElementById('answerFeedback');
+        fb.textContent  = data.correct ? `✓ Correct! +${data.points} pts` : '✗ Wrong!';
+        fb.className    = 'answer-feedback ' + (data.correct ? 'fb-correct' : 'fb-wrong');
+        fb.style.display = 'block';
+      }
+    } catch (e) { console.error('submit error', e); }
+  }
+
+  function submitFRQ() {
+    const val = document.getElementById('frqInput').value.trim();
+    if (!val) return;
+    submitAnswer(val);
+    document.getElementById('frqInput').disabled  = true;
+    document.getElementById('frqSubmit').disabled = true;
+  }
+
+  function submitMulti() {
+    if (selectedMulti.size === 0) return;
+    submitAnswer(Array.from(selectedMulti));
+  }
+
+  document.getElementById('frqSubmit').onclick = submitFRQ;
+  document.getElementById('frqInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitFRQ();
+  });
+
+  // ── Host: skip to answer ──────────────────────────────────
+  async function skipToAnswer() {
+    const btn = document.getElementById('skipBtn');
+    btn.disabled = true;
+    try {
+      await fetch(`/room/${ROOM_CODE}/skip`, {method: 'POST'});
+    } catch (e) { console.error('skip error', e); }
+    btn.disabled = false;
+  }
+
+  // ── Host: advance ─────────────────────────────────────────
+  async function advanceQuestion() {
+    const btn = document.getElementById('nextBtn');
+    btn.disabled = true;
+    try {
+      await fetch(`/room/${ROOM_CODE}/next`, {method: 'POST'});
+    } catch (e) { console.error('next error', e); }
+    btn.disabled = false;
+  }
+
+  // ── Host: end game early ───────────────────────────────────
+  async function endEarly() {
+    if (!confirm('End the game now?')) return;
+    try {
+      await fetch(`/room/${ROOM_CODE}/end`, {method: 'POST'});
+    } catch (e) { console.error('end error', e); }
+  }
+
+  // ── Scoreboard ────────────────────────────────────────────
+  const MEDALS = ['🥇','🥈','🥉'];
+
+  function renderScores(scores) {
+    document.getElementById('scoreList').innerHTML = scores.map((s, i) => `
+      <div class="score-row${s.id === MY_ID ? ' score-me' : ''}">
+        <span class="score-rank">${MEDALS[i] || (i + 1)}</span>
+        <span class="score-name">${s.name}</span>
+        <span class="score-pts">${s.score}</span>
+      </div>
+    `).join('');
+  }
+
+  // ── End screen ────────────────────────────────────────────
+  function showEnd(state) {
+    clearInterval(pollId);
+    document.getElementById('endScores').innerHTML = state.scores.map((s, i) => `
+      <div class="end-score-row${s.id === MY_ID ? ' end-score-me' : ''}">
+        <span>${MEDALS[i] || (i + 1)}</span>
+        <span>${s.name}</span>
+        <span>${s.score} pts</span>
+      </div>
+    `).join('');
+    document.getElementById('endOverlay').style.display = 'flex';
+  }
+</script>
+{% endblock %}

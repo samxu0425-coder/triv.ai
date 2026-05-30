@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Lobby {{ room.code }} - triv.ai{% endblock %}
+
+{% block body_content %}
+<div class="lobby-page">
+
+    <!-- Room code -->
+    <div class="lobby-code-section">
+        <p class="code-label">Room Code</p>
+        <div class="code-tiles">
+            {% for char in room.code %}
+            <div class="code-tile">{{ char }}</div>
+            {% endfor %}
+        </div>
+        <button class="copy-btn" onclick="copyCode('{{ room.code }}')">Copy Code</button>
+        <p class="share-hint">Share this with your players</p>
+    </div>
+
+    <!-- Player list -->
+    <div class="lobby-players-section">
+        <p class="players-title">Players <span id="player-count">{{ room.players|length }}</span></p>
+        <ul class="player-list" id="player-list">
+            {% for player in room.players %}
+            <li class="player-item">
+                <div class="player-avatar" data-index="{{ loop.index0 }}">{{ player.name[0].upper() }}</div>
+                <span class="player-name">{{ player.name }}</span>
+                {% if player.is_host %}<span class="host-badge">Host</span>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <!-- Action -->
+    <div class="lobby-action">
+        {% if is_host %}
+        <form method="POST" action="{{ url_for('start_game', code=room.code) }}">
+            <button type="submit" class="btn-start">Start Game</button>
+        </form>
+        <p class="lobby-hint">Questions are ready — start when your players are in</p>
+        {% else %}
+        <p class="waiting-text">Waiting for host to start</p>
+        <div class="waiting-dots"><span></span><span></span><span></span></div>
+        {% endif %}
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const roomCode = '{{ room.code }}';
+const isHost = '{{ "true" if is_host else "false" }}' === 'true';
+const COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#14b8a6'];
+
+function copyCode(code) {
+    navigator.clipboard.writeText(code).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy Code', 2000);
+    });
+}
+
+// Color the avatars on initial render
+document.querySelectorAll('.player-avatar[data-index]').forEach(el => {
+    el.style.background = COLORS[parseInt(el.dataset.index) % COLORS.length];
+});
+
+function renderPlayers(players) {
+    document.getElementById('player-count').textContent = players.length;
+    document.getElementById('player-list').innerHTML = players.map((p, i) => `
+        <li class="player-item">
+            <div class="player-avatar" style="background:${COLORS[i % COLORS.length]}">${p.name[0].toUpperCase()}</div>
+            <span class="player-name">${p.name}</span>
+            ${p.is_host ? '<span class="host-badge">Host</span>' : ''}
+        </li>
+    `).join('');
+}
+
+async function pollPlayers() {
+    try {
+        const res = await fetch(`/api/room/${roomCode}/players`);
+        const data = await res.json();
+        if (data.players) renderPlayers(data.players);
+        if (data.status === 'active') {
+            window.location.href = `/room/${roomCode}/game`;
+        }
+    } catch (e) { /* server temporarily unreachable */ }
+}
+
+setInterval(pollPlayers, 2500);
+</script>
+{% endblock %}
