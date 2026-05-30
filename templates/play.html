@@ -3,24 +3,51 @@
 {% block title %}Play - triv.ai{% endblock %}
 
 {% block content %}
-<div class="welcome-card">
-    <h1>triv.ai</h1>
-    <p>AI-powered trivia for everyone</p>
+<div class="play-header">
+    <h2>triv.ai</h2>
+    <p>Ready to play?</p>
+</div>
 
+<!-- Host section -->
+<div class="play-section">
+    <h3>Host a Game</h3>
     {% if session.user_id %}
-        <p class="subtitle">Playing as <strong>{{ session.display_name }}</strong></p>
-        <div class="btn-group">
-            <a href="#" class="btn">Create Game</a>
-            <a href="#" class="btn btn-secondary">Join Game</a>
-        </div>
+        <form method="POST" action="{{ url_for('create_room') }}">
+            <button type="submit" class="btn">Create Game</button>
+        </form>
     {% else %}
-        <div class="btn-group">
-            <a href="#" class="btn btn-secondary">Join as Guest</a>
-            <a href="{{ url_for('login') }}" class="btn">Log In to Host</a>
-        </div>
-        <div class="text-center mt-3">
-            <p>New here? <a href="{{ url_for('register') }}">Create an account</a> to host games and track your scores.</p>
-        </div>
+        <p class="section-hint">You need an account to host.</p>
+        <a href="{{ url_for('login') }}" class="btn">Log In to Host</a>
     {% endif %}
 </div>
+
+<div class="play-divider"><span>or</span></div>
+
+<!-- Join section -->
+<div class="play-section">
+    <h3>Join a Game</h3>
+    <form method="POST" action="{{ url_for('join_room') }}">
+        <div class="form-group">
+            <label for="code">Room Code</label>
+            <input type="text" id="code" name="code" maxlength="6"
+                   placeholder="ABCD12" required
+                   style="text-transform: uppercase; letter-spacing: 0.2em; font-size: 1.2rem; text-align: center;">
+        </div>
+        <div class="form-group">
+            <label for="display_name">Your Name</label>
+            <input type="text" id="display_name" name="display_name"
+                   value="{{ session.display_name or '' }}"
+                   placeholder="How you'll appear to others" required>
+        </div>
+        <button type="submit" class="btn btn-secondary">Join Game</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('code').addEventListener('input', function () {
+        this.value = this.value.toUpperCase();
+    });
+</script>
 {% endblock %}
