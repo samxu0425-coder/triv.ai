@@ -798,18 +798,23 @@ def submit_answer(code):
     q = room['questions'][current_q]
     correct = q['answer']
     elapsed = time.time() - room['q_start_time']
-    speed_bonus = max(0, int((QUESTION_TIME - elapsed) / QUESTION_TIME * 500))
+
+    # Points scale linearly from MAX_PTS (instant) down to MIN_PTS (last second)
+    MAX_PTS, MIN_PTS = 1000, 200
+    time_ratio  = max(0.0, (QUESTION_TIME - elapsed) / QUESTION_TIME)
+    base_points = int(MIN_PTS + (MAX_PTS - MIN_PTS) * time_ratio)
+
     room['answers'][current_q][player_id] = answer
 
     if q['type'] == 'mcq':
         is_correct = str(answer).strip().lower() == str(correct).strip().lower()
-        points = (1000 + speed_bonus) if is_correct else 0
+        points = base_points if is_correct else 0
         room['scores'][player_id] = room['scores'].get(player_id, 0) + points
         return jsonify({'correct': is_correct, 'points': points})
 
     elif q['type'] == 'multi':
         is_correct = set(answer) == set(correct) if isinstance(correct, list) else False
-        points = (1000 + speed_bonus) if is_correct else 0
+        points = base_points if is_correct else 0
         room['scores'][player_id] = room['scores'].get(player_id, 0) + points
         return jsonify({'correct': is_correct, 'points': points})
 
@@ -817,7 +822,8 @@ def submit_answer(code):
         # Grade via AI — result stored, revealed only when host shows answer
         grade = grade_frq_answer(q, str(answer))
         score_pct = grade['score_pct']
-        points = int((1000 + speed_bonus) * score_pct / 100)
+        # Speed sets the ceiling; FRQ grade percentage scales it down
+        points = int(base_points * score_pct / 100)
         room['scores'][player_id] = room['scores'].get(player_id, 0) + points
         room['grades'][current_q][player_id] = {
             'score_pct': score_pct,
