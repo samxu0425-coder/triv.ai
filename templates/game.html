@@ -2,14 +2,18 @@
 
 {% block title %}Game {{ room.code }} - triv.ai{% endblock %}
 
+{% block navbar %}{% endblock %}
+
 {% block body_content %}
 <div class="game-page" id="gamePage">
 
   <!-- Header bar -->
   <div class="game-header">
     <div class="game-header-left">
-      <span class="game-logo">triv.ai</span>
-      <span class="game-room-pill">{{ room.code }}</span>
+      <div class="game-brand">
+        <a href="{{ url_for('landing') }}" class="game-logo-link">triv.ai</a>
+        <span class="game-room-pill">{{ room.code }}</span>
+      </div>
     </div>
     <div class="game-header-center">
       Q <span id="qNum">1</span> <span class="q-sep">/</span> <span id="qTotal">{{ room.questions|length }}</span>
@@ -57,6 +61,10 @@
   <div class="host-controls" id="hostControls">
     <button class="skip-btn" id="skipBtn" onclick="skipToAnswer()">Skip to Answer</button>
     <button class="next-btn" id="nextBtn" onclick="advanceQuestion()" style="display:none">Next Question</button>
+    <button class="pause-btn" id="pauseBtn" onclick="togglePause()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      Pause
+    </button>
     <button class="end-early-btn" id="endEarlyBtn" onclick="endEarly()">End Game</button>
   </div>
   {% endif %}
@@ -67,6 +75,26 @@
       <div class="end-trophy">&#127942;</div>
       <h2 class="end-title">Game Over!</h2>
       <div class="end-scores" id="endScores"></div>
+
+      {% if is_host and not questions_saved %}
+      <div class="save-set-section">
+        <div id="saveSetPrompt">
+          <button class="save-set-btn" onclick="showSaveInput()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Question Set
+          </button>
+        </div>
+        <div id="saveSetForm" style="display:none">
+          <input type="text" class="save-set-input" id="saveSetName" placeholder="Name this question set...">
+          <div class="save-set-actions">
+            <button class="save-confirm-btn" onclick="confirmSave()">Save</button>
+            <button class="save-cancel-btn" onclick="hideSaveInput()">Cancel</button>
+          </div>
+        </div>
+        <p class="save-set-done" id="saveSetDone" style="display:none">&#10003; Saved to your sets!</p>
+      </div>
+      {% endif %}
+
       <div class="end-actions">
         <a href="/play" class="end-btn">Play Again</a>
       </div>
@@ -77,7 +105,7 @@
 
 <script>
   const ROOM_CODE = "{{ room.code }}";
-  const IS_HOST   = {{ 'true' if is_host else 'false' }};
+  const IS_HOST   = "{{ is_host|string|lower }}" === "true";
   const MY_ID     = "{{ player_id }}";
 
   let lastQIndex  = -1;
@@ -110,8 +138,13 @@
     document.getElementById('qTotal').textContent = state.total_q;
 
     const timerEl = document.getElementById('timer');
-    timerEl.textContent = state.time_left;
-    timerEl.className = 'game-timer' + (state.time_left <= 5 ? ' timer-urgent' : '');
+    if (state.paused) {
+      timerEl.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+      timerEl.className = 'game-timer timer-paused';
+    } else {
+      timerEl.textContent = state.time_left;
+      timerEl.className = 'game-timer' + (state.time_left <= 5 ? ' timer-urgent' : '');
+    }
 
     // Status bar
     document.getElementById('statusBar').textContent =
@@ -133,15 +166,25 @@
         revealAnswer(q, state.my_answer);
       }
       if (IS_HOST) {
-        document.getElementById('skipBtn').style.display = 'none';
+        document.getElementById('skipBtn').style.display  = 'none';
+        document.getElementById('pauseBtn').style.display = 'none';
         const nextBtn = document.getElementById('nextBtn');
         nextBtn.style.display = 'inline-flex';
         nextBtn.textContent = state.current_q + 1 >= state.total_q ? 'End Game' : 'Next Question';
       }
     } else {
       if (IS_HOST) {
-        document.getElementById('skipBtn').style.display = 'inline-flex';
-        document.getElementById('nextBtn').style.display = 'none';
+        document.getElementById('skipBtn').style.display  = 'inline-flex';
+        document.getElementById('nextBtn').style.display  = 'none';
+        const pauseBtn = document.getElementById('pauseBtn');
+        pauseBtn.style.display   = 'inline-flex';
+        if (state.paused) {
+          pauseBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg> Resume';
+          pauseBtn.classList.add('is-paused');
+        } else {
+          pauseBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> Pause';
+          pauseBtn.classList.remove('is-paused');
+        }
       }
     }
 
@@ -257,8 +300,22 @@
 
     } else if (q.type === 'frq') {
       document.getElementById('frqArea').style.display = 'none';
-      fb.textContent  = `Answer: ${q.answer}`;
-      fb.className    = 'answer-feedback fb-correct';
+      const grade = state.my_frq_grade;
+      if (grade) {
+        const pct = grade.score_pct;
+        const cls = pct >= 75 ? 'fb-correct' : pct >= 35 ? 'fb-partial' : 'fb-wrong';
+        fb.className = 'answer-feedback ' + cls;
+        let html = `<div class="frq-reveal-expected">Expected: ${q.answer}</div>`;
+        html += `<div class="frq-reveal-score">${grade.points} pts &nbsp;<span class="frq-pct">(${pct}%)</span></div>`;
+        if (grade.triggered && grade.triggered.length) {
+          html += `<div class="frq-reveal-deductions">${grade.triggered.map(t =>
+            `<span class="deduction-tag">−${t}</span>`).join('')}</div>`;
+        }
+        fb.innerHTML = html;
+      } else {
+        fb.innerHTML = `<div class="frq-reveal-expected">Expected: ${q.answer}</div>`;
+        fb.className = 'answer-feedback fb-correct';
+      }
       fb.style.display = 'block';
     }
   }
@@ -277,10 +334,14 @@
         body: JSON.stringify({answer}),
       });
       const data = await res.json();
-      if (data.points !== undefined) {
-        const fb = document.getElementById('answerFeedback');
-        fb.textContent  = data.correct ? `✓ Correct! +${data.points} pts` : '✗ Wrong!';
-        fb.className    = 'answer-feedback ' + (data.correct ? 'fb-correct' : 'fb-wrong');
+      const fb = document.getElementById('answerFeedback');
+      if (data.pending_reveal) {
+        fb.textContent   = '✓ Answer submitted — score revealed when time is up';
+        fb.className     = 'answer-feedback fb-pending';
+        fb.style.display = 'block';
+      } else if (data.points !== undefined) {
+        fb.textContent   = data.correct ? `✓ Correct! +${data.points} pts` : '✗ Wrong!';
+        fb.className     = 'answer-feedback ' + (data.correct ? 'fb-correct' : 'fb-wrong');
         fb.style.display = 'block';
       }
     } catch (e) { console.error('submit error', e); }
@@ -303,6 +364,17 @@
   document.getElementById('frqInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') submitFRQ();
   });
+
+  // ── Host: pause / resume ─────────────────────────────────
+  async function togglePause() {
+    const btn = document.getElementById('pauseBtn');
+    btn.disabled = true;
+    const paused = btn.classList.contains('is-paused');
+    try {
+      await fetch(`/room/${ROOM_CODE}/${paused ? 'resume' : 'pause'}`, {method: 'POST'});
+    } catch (e) { console.error('pause error', e); }
+    btn.disabled = false;
+  }
 
   // ── Host: skip to answer ──────────────────────────────────
   async function skipToAnswer() {
@@ -330,6 +402,45 @@
     try {
       await fetch(`/room/${ROOM_CODE}/end`, {method: 'POST'});
     } catch (e) { console.error('end error', e); }
+  }
+
+  // ── Save question set ─────────────────────────────────────
+  function showSaveInput() {
+    document.getElementById('saveSetPrompt').style.display = 'none';
+    document.getElementById('saveSetForm').style.display   = 'block';
+    document.getElementById('saveSetName').focus();
+  }
+
+  function hideSaveInput() {
+    document.getElementById('saveSetPrompt').style.display = 'block';
+    document.getElementById('saveSetForm').style.display   = 'none';
+  }
+
+  async function confirmSave() {
+    const name = document.getElementById('saveSetName').value.trim();
+    const btn  = document.querySelector('.save-confirm-btn');
+    btn.disabled    = true;
+    btn.textContent = 'Saving...';
+    try {
+      const res  = await fetch(`/room/${ROOM_CODE}/save_set`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name}),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById('saveSetForm').style.display = 'none';
+        document.getElementById('saveSetDone').style.display = 'block';
+      } else {
+        btn.disabled    = false;
+        btn.textContent = 'Save';
+        alert(data.error || 'Save failed.');
+      }
+    } catch (e) {
+      btn.disabled    = false;
+      btn.textContent = 'Save';
+      console.error('save error', e);
+    }
   }
 
   // ── Scoreboard ────────────────────────────────────────────
