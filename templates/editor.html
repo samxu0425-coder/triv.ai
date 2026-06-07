@@ -1,0 +1,490 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'build' %}Build Questions{% else %}Edit Set{% endif %} - triv.ai{% endblock %}
+{% block navbar %}{% endblock %}
+
+{% block body_content %}
+<div class="editor-page">
+
+  <!-- Header -->
+  <div class="editor-header">
+    <div class="editor-brand">
+      <a href="{{ url_for('landing') }}" class="game-logo-link">triv.ai</a>
+      <input type="text" class="editor-set-name-input" id="setNameInput"
+             value="{{ set_name }}" placeholder="Name this set...">
+    </div>
+    <div class="editor-title-text">
+      {{ "Build Questions" if mode == "build" else "Edit Question Set" }}
+    </div>
+    <div class="editor-header-actions">
+      <a href="{{ return_url }}" class="editor-cancel-btn">Cancel</a>
+      {% if mode == 'build' %}
+      <button class="editor-save-secondary-btn" id="editorSaveAsBtn" onclick="saveAsSet()">Save to My Sets</button>
+      {% endif %}
+      <button class="editor-save-btn" id="editorSaveBtn" onclick="saveAll()">
+        {{ "Use These Questions" if mode == "build" else "Save Changes" }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Question strip -->
+  <div class="qstrip-wrapper">
+    <div class="qstrip" id="qstrip"></div>
+  </div>
+
+  <!-- Editor body -->
+  <div class="editor-body">
+
+    <!-- Empty state -->
+    <div class="editor-empty" id="editorEmpty">
+      <div class="editor-empty-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+      </div>
+      <h3>No questions yet</h3>
+      <p>Add your first question to get started</p>
+      <button class="editor-add-first-btn" onclick="addQuestion()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add First Question
+      </button>
+    </div>
+
+    <!-- Question panel -->
+    <div class="question-panel" id="questionPanel" style="display:none">
+
+      <div class="qp-header">
+        <span class="qp-num" id="qpNum">Question 1</span>
+        <button class="qp-delete-btn" onclick="deleteCurrentQuestion()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+          Delete
+        </button>
+      </div>
+
+      <!-- Type -->
+      <div class="qp-field">
+        <label class="qp-label">Question Type</label>
+        <div class="qp-type-row">
+          <button class="qp-type-btn" data-type="mcq"   onclick="setType('mcq')">Multiple Choice</button>
+          <button class="qp-type-btn" data-type="multi" onclick="setType('multi')">Multi-Select</button>
+          <button class="qp-type-btn" data-type="frq"   onclick="setType('frq')">Free Response</button>
+        </div>
+      </div>
+
+      <!-- Question text -->
+      <div class="qp-field">
+        <label class="qp-label">Question</label>
+        <textarea class="qp-textarea" id="qpText" rows="3" placeholder="Enter your question..."></textarea>
+      </div>
+
+      <!-- MCQ panel -->
+      <div id="mcqPanel" style="display:none">
+        <label class="qp-label">Choices <span class="qp-hint">— click ○ to mark correct</span></label>
+        <div class="choices-list" id="mcqList"></div>
+      </div>
+
+      <!-- Multi panel -->
+      <div id="multiPanel" style="display:none">
+        <label class="qp-label">Choices <span class="qp-hint">— check all correct answers</span></label>
+        <div class="choices-list" id="multiList"></div>
+        <button class="add-choice-btn" id="addChoiceBtn" onclick="addMultiChoice()">+ Add Choice</button>
+      </div>
+
+      <!-- FRQ panel -->
+      <div id="frqPanel" style="display:none">
+        <div class="frq-editor-layout">
+
+          <div class="frq-editor-left">
+            <div class="qp-field">
+              <label class="qp-label">Expected Answer</label>
+              <textarea class="qp-textarea" id="frqExpected" rows="4"
+                placeholder="Describe what a full-marks answer should say..."></textarea>
+            </div>
+          </div>
+
+          <div class="frq-editor-right">
+            <div class="rubric-header">
+              <label class="qp-label">Grading Rubric</label>
+              <p class="rubric-note-top">Each condition the AI detects subtracts that % from the score. Leave empty for automatic grading.</p>
+            </div>
+            <div class="rubric-list" id="rubricList"></div>
+            <button class="add-rubric-btn" onclick="addRubricRow()">+ Add Condition</button>
+            <p class="rubric-note">Full score = 1000 pts &nbsp;·&nbsp; Deductions compound down to 0</p>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <div class="qp-nav">
+        <button class="qp-nav-btn" id="prevBtn" onclick="navigateBy(-1)">← Prev</button>
+        <span class="qp-nav-counter" id="qpCounter">1 / 1</span>
+        <button class="qp-nav-btn" id="nextBtn" onclick="navigateBy(1)">Next →</button>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script id="questions-data" type="application/json">{{ questions_json | safe }}</script>
+<script>
+const MODE       = "{{ mode }}";
+const ROOM_CODE  = "{{ room.code if room else '' }}";
+const SET_ID     = "{{ set_id or '' }}";
+const RETURN_URL = "{{ return_url }}";
+
+let questions    = JSON.parse(document.getElementById('questions-data').textContent);
+let currentIndex = -1;
+const LABELS     = ['A','B','C','D'];
+console.log('[editor] loaded', questions.length, 'questions, mode=', MODE, 'set_id=', SET_ID);
+
+// ── Init ──────────────────────────────────────────────────
+initAnswerState();
+renderStrip();
+if (questions.length > 0) selectQuestion(0);
+else showEmpty(true);
+
+function normStr(s) { return String(s == null ? '' : s).trim(); }
+
+function initAnswerState() {
+  questions.forEach(q => {
+    if (!q.rubric) q.rubric = [];
+    if (!Array.isArray(q.choices)) q.choices = [];
+    if (q.type === 'mcq') {
+      const ans = normStr(q.answer);
+      if (ans) {
+        const idx = q.choices.findIndex(c => normStr(c) === ans);
+        q._ansIdx = idx >= 0 ? idx : null;
+      } else {
+        q._ansIdx = null;
+      }
+    } else if (q.type === 'multi') {
+      const ansArr = Array.isArray(q.answer) ? q.answer : [];
+      const ansSet = new Set(ansArr.map(normStr));
+      q._ansIdxs = q.choices.reduce((acc, c, i) => {
+        if (ansSet.has(normStr(c))) acc.push(i);
+        return acc;
+      }, []);
+    }
+  });
+  console.log('[editor] initAnswerState complete:', questions.map((q,i) =>
+    `Q${i+1}(${q.type}) ans=${JSON.stringify(q.answer)} _ansIdx=${q._ansIdx} _ansIdxs=${JSON.stringify(q._ansIdxs)}`
+  ));
+}
+
+// ── Strip ─────────────────────────────────────────────────
+function renderStrip() {
+  const strip = document.getElementById('qstrip');
+  const chips = questions.map((q, i) => {
+    const lbl = {mcq:'MCQ', multi:'Multi', frq:'FRQ'}[q.type] || '?';
+    return `<button class="qchip${i === currentIndex ? ' active' : ''}" onclick="selectQuestion(${i})">
+      <span class="qchip-num">Q${i+1}</span>
+      <span class="qchip-type">${lbl}</span>
+    </button>`;
+  });
+  chips.push(`<button class="qchip qchip-add" title="Add question" onclick="addQuestion()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>`);
+  strip.innerHTML = chips.join('');
+  const active = strip.querySelector('.qchip.active');
+  if (active) active.scrollIntoView({inline:'nearest', behavior:'smooth'});
+}
+
+// ── Navigation ────────────────────────────────────────────
+function selectQuestion(idx) {
+  if (currentIndex >= 0) saveEdits();
+  currentIndex = idx;
+  renderStrip();
+  showEmpty(false);
+  renderPanel();
+}
+
+function navigateBy(delta) {
+  const n = currentIndex + delta;
+  if (n >= 0 && n < questions.length) selectQuestion(n);
+}
+
+function showEmpty(show) {
+  document.getElementById('editorEmpty').style.display   = show ? 'flex' : 'none';
+  document.getElementById('questionPanel').style.display = show ? 'none'  : 'block';
+}
+
+// ── Add / Delete ──────────────────────────────────────────
+function addQuestion() {
+  if (currentIndex >= 0) saveEdits();
+  questions.push({question:'', type:'mcq', choices:['','','',''], answer:'', rubric:[], _ansIdx:null});
+  currentIndex = questions.length - 1;
+  renderStrip(); showEmpty(false); renderPanel();
+  document.getElementById('qpText').focus();
+}
+
+function deleteCurrentQuestion() {
+  if (!confirm('Delete this question?')) return;
+  questions.splice(currentIndex, 1);
+  if (questions.length === 0) { currentIndex = -1; renderStrip(); showEmpty(true); }
+  else { currentIndex = Math.min(currentIndex, questions.length - 1); renderStrip(); renderPanel(); }
+}
+
+// ── Panel ─────────────────────────────────────────────────
+function renderPanel() {
+  const q = questions[currentIndex];
+  document.getElementById('qpNum').textContent     = `Question ${currentIndex + 1}`;
+  document.getElementById('qpCounter').textContent = `${currentIndex + 1} / ${questions.length}`;
+  document.getElementById('prevBtn').disabled       = currentIndex === 0;
+  document.getElementById('nextBtn').disabled       = currentIndex === questions.length - 1;
+  document.getElementById('qpText').value           = q.question;
+
+  document.querySelectorAll('.qp-type-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === q.type));
+
+  document.getElementById('mcqPanel').style.display   = 'none';
+  document.getElementById('multiPanel').style.display = 'none';
+  document.getElementById('frqPanel').style.display   = 'none';
+
+  if (q.type === 'mcq')   { document.getElementById('mcqPanel').style.display   = 'block'; renderMCQ(q); }
+  if (q.type === 'multi') { document.getElementById('multiPanel').style.display = 'block'; renderMulti(q); }
+  if (q.type === 'frq')   { document.getElementById('frqPanel').style.display   = 'block'; renderFRQ(q); }
+}
+
+// ── MCQ ───────────────────────────────────────────────────
+function renderMCQ(q) {
+  // Fallback: if _ansIdx wasn't resolved by initAnswerState, try again now
+  if (q._ansIdx == null) {
+    const ans = normStr(q.answer);
+    if (ans) {
+      const idx = q.choices.findIndex(c => normStr(c) === ans);
+      if (idx >= 0) q._ansIdx = idx;
+    }
+  }
+  document.getElementById('mcqList').innerHTML = q.choices.slice(0,4).map((c, i) => {
+    const sel = q._ansIdx === i;
+    return `<div class="choice-row">
+      <button class="ans-dot${sel?' selected':''}" onclick="setMCQAns(${i})">${sel?'●':'○'}</button>
+      <input class="choice-input" value="${esc(c)}" placeholder="Choice ${LABELS[i]}"
+             oninput="questions[${currentIndex}].choices[${i}]=this.value">
+    </div>`;
+  }).join('');
+}
+
+function setMCQAns(idx) {
+  questions[currentIndex]._ansIdx = idx;
+  renderMCQ(questions[currentIndex]);
+}
+
+// ── Multi ─────────────────────────────────────────────────
+function renderMulti(q) {
+  // Fallback: if _ansIdxs wasn't resolved by initAnswerState, try again now
+  if (!q._ansIdxs || q._ansIdxs.length === 0) {
+    const ansArr = Array.isArray(q.answer) ? q.answer : [];
+    const ansSet = new Set(ansArr.map(normStr));
+    if (ansSet.size > 0) {
+      q._ansIdxs = q.choices.reduce((acc, c, i) => {
+        if (ansSet.has(normStr(c))) acc.push(i);
+        return acc;
+      }, []);
+    }
+  }
+  const s = new Set(q._ansIdxs || []);
+  const canRemove = q.choices.length > 2;
+  document.getElementById('multiList').innerHTML = q.choices.map((c, i) => `
+    <div class="choice-row">
+      <button class="ans-check${s.has(i)?' selected':''}" onclick="toggleMultiAns(${i})">${s.has(i)?'✓':''}</button>
+      <input class="choice-input" value="${esc(c)}" placeholder="Choice ${i+1}"
+             oninput="questions[${currentIndex}].choices[${i}]=this.value">
+      ${canRemove ? `<button class="remove-choice-btn" onclick="removeMultiChoice(${i})">×</button>` : ''}
+    </div>`).join('');
+  document.getElementById('addChoiceBtn').style.display = q.choices.length >= 6 ? 'none' : 'flex';
+}
+
+function toggleMultiAns(idx) {
+  const q = questions[currentIndex];
+  if (!q._ansIdxs) q._ansIdxs = [];
+  const pos = q._ansIdxs.indexOf(idx);
+  if (pos >= 0) q._ansIdxs.splice(pos, 1); else q._ansIdxs.push(idx);
+  renderMulti(q);
+}
+
+function addMultiChoice() {
+  const q = questions[currentIndex];
+  if (q.choices.length >= 6) return;
+  q.choices.push(''); renderMulti(q);
+}
+
+function removeMultiChoice(idx) {
+  const q = questions[currentIndex];
+  if (q.choices.length <= 2) return;
+  q.choices.splice(idx, 1);
+  q._ansIdxs = (q._ansIdxs||[]).filter(i=>i!==idx).map(i=>i>idx?i-1:i);
+  renderMulti(q);
+}
+
+// ── FRQ ───────────────────────────────────────────────────
+function renderFRQ(q) {
+  document.getElementById('frqExpected').value = typeof q.answer === 'string' ? q.answer : '';
+  renderRubric(q);
+}
+
+function renderRubric(q) {
+  document.getElementById('rubricList').innerHTML = (q.rubric || []).map((r, i) => `
+    <div class="rubric-row">
+      <input class="rubric-cond-input" value="${esc(r.condition)}"
+             placeholder="e.g. Didn't mention the key date"
+             oninput="questions[${currentIndex}].rubric[${i}].condition=this.value">
+      <div class="rubric-deduct-wrap">
+        <span class="rubric-minus">−</span>
+        <input type="number" class="rubric-pct-input" value="${r.deduction}" min="1" max="100"
+               oninput="questions[${currentIndex}].rubric[${i}].deduction=+this.value">
+        <span class="rubric-pct-label">%</span>
+      </div>
+      <button class="remove-choice-btn" onclick="removeRubricRow(${i})">×</button>
+    </div>`).join('');
+}
+
+function addRubricRow() {
+  const q = questions[currentIndex];
+  if (!q.rubric) q.rubric = [];
+  q.rubric.push({condition:'', deduction:25});
+  renderRubric(q);
+  const inputs = document.querySelectorAll('.rubric-cond-input');
+  if (inputs.length) inputs[inputs.length-1].focus();
+}
+
+function removeRubricRow(idx) {
+  questions[currentIndex].rubric.splice(idx, 1);
+  renderRubric(questions[currentIndex]);
+}
+
+// ── Type switch ───────────────────────────────────────────
+function setType(type) {
+  const q = questions[currentIndex];
+  if (q.type === type) return;
+  q.type = type;
+  if (type === 'mcq')   { q.choices=['','','','']; q.answer=''; q._ansIdx=null; delete q._ansIdxs; }
+  if (type === 'multi') { q.choices=['','']; q.answer=[]; q._ansIdxs=[]; delete q._ansIdx; }
+  if (type === 'frq')   { q.choices=[]; q.answer=''; q.rubric=[]; delete q._ansIdx; delete q._ansIdxs; }
+  renderPanel();
+}
+
+// ── Flush DOM → state ─────────────────────────────────────
+function saveEdits() {
+  if (currentIndex < 0 || currentIndex >= questions.length) return;
+  const q = questions[currentIndex];
+  q.question = document.getElementById('qpText').value.trim();
+  if (q.type === 'mcq') {
+    q.answer = (q._ansIdx !== null && q._ansIdx < q.choices.length) ? q.choices[q._ansIdx] : '';
+  } else if (q.type === 'multi') {
+    q.answer = (q._ansIdxs||[]).map(i => q.choices[i]).filter(Boolean);
+  } else if (q.type === 'frq') {
+    q.answer = document.getElementById('frqExpected').value.trim();
+    // rubric updated inline
+  }
+}
+
+// ── Validate ──────────────────────────────────────────────
+function validateQuestions() {
+  // Returns array of {num, issues} for any incomplete questions
+  const incomplete = [];
+  questions.forEach((q, i) => {
+    const issues = [];
+    if (!q.question.trim()) issues.push('no question text');
+    if (q.type === 'mcq') {
+      if (q._ansIdx == null) issues.push('no correct answer selected');
+      const filled = q.choices.filter(c => c.trim()).length;
+      if (filled < 2) issues.push('needs at least 2 choices');
+    } else if (q.type === 'multi') {
+      if (!q._ansIdxs || q._ansIdxs.length === 0) issues.push('no correct answers checked');
+      const filled = q.choices.filter(c => c.trim()).length;
+      if (filled < 2) issues.push('needs at least 2 choices');
+    } else if (q.type === 'frq') {
+      if (!String(q.answer || '').trim()) issues.push('no expected answer');
+    }
+    if (issues.length) incomplete.push({ idx: i, num: i + 1, issues });
+  });
+  return incomplete;
+}
+
+// ── Save as new set (build mode) ──────────────────────────
+async function saveAsSet() {
+  saveEdits();
+  if (questions.length === 0) { alert('Add at least one question.'); return; }
+
+  const incomplete = validateQuestions();
+  if (incomplete.length) {
+    selectQuestion(incomplete[0].idx);
+    const lines = incomplete.map(q => `  Q${q.num}: ${q.issues.join(', ')}`).join('\n');
+    alert(`Can't save — ${incomplete.length} question${incomplete.length > 1 ? 's are' : ' is'} incomplete:\n\n${lines}`);
+    return;
+  }
+
+  const nameEl = document.getElementById('setNameInput');
+  const setName = (nameEl ? nameEl.value.trim() : '');
+  if (!setName) { nameEl && nameEl.focus(); alert('Give this set a name first.'); return; }
+
+  const payload = questions.map(q => {
+    const out = {question:q.question, type:q.type, choices:q.choices, answer:q.answer};
+    if (q.type === 'frq' && q.rubric && q.rubric.length) out.rubric = q.rubric;
+    return out;
+  });
+
+  const btn = document.getElementById('editorSaveAsBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    const res  = await fetch(`/room/${ROOM_CODE}/save_as_set`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({questions: payload, set_name: setName}),
+    });
+    const data = await res.json();
+    if (data.ok) { window.location.href = data.redirect || RETURN_URL; }
+    else { alert(data.error || 'Save failed.'); btn.disabled=false; btn.textContent='Save to My Sets'; }
+  } catch(e) {
+    alert('Network error.'); btn.disabled=false; btn.textContent='Save to My Sets';
+  }
+}
+
+// ── Save to server ────────────────────────────────────────
+async function saveAll() {
+  saveEdits();
+  if (questions.length === 0) { alert('Add at least one question.'); return; }
+
+  const incomplete = validateQuestions();
+  if (incomplete.length) {
+    // Jump to the first problem question
+    selectQuestion(incomplete[0].idx);
+    const lines = incomplete.map(q => `  Q${q.num}: ${q.issues.join(', ')}`).join('\n');
+    alert(`Can't save — ${incomplete.length} question${incomplete.length > 1 ? 's are' : ' is'} incomplete:\n\n${lines}\n\nFix these before saving.`);
+    return;
+  }
+
+  const payload = questions.map(q => {
+    const out = {question:q.question, type:q.type, choices:q.choices, answer:q.answer};
+    if (q.type === 'frq' && q.rubric && q.rubric.length) out.rubric = q.rubric;
+    return out;
+  });
+
+  const btn = document.getElementById('editorSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const nameEl = document.getElementById('setNameInput');
+    const body = {questions: payload, set_name: nameEl ? nameEl.value.trim() : ''};
+    const url  = MODE === 'build' ? `/room/${ROOM_CODE}/build` : `/saved_sets/${SET_ID}/update`;
+    const res  = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await res.json();
+    if (data.ok) {
+      window.location.href = data.redirect || RETURN_URL;
+    } else {
+      alert(data.error || 'Save failed.');
+      btn.disabled = false;
+      btn.textContent = MODE === 'build' ? 'Use These Questions' : 'Save Changes';
+    }
+  } catch(e) {
+    alert('Network error. Please try again.');
+    btn.disabled = false;
+    btn.textContent = MODE === 'build' ? 'Use These Questions' : 'Save Changes';
+  }
+}
+
+function esc(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

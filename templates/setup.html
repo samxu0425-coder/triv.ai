@@ -23,6 +23,10 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 Saved Sets
             </button>
+            <button class="setup-tab" data-href="{{ url_for('build_questions', code=room.code) }}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                Build Manually
+            </button>
         </div>
 
         <!-- Create New Panel -->
@@ -116,13 +120,54 @@ Examples: 'The French Revolution', 'Python basics', 'Our Q3 earnings call transc
 
         <!-- Saved Sets Panel -->
         <div class="setup-panel hidden" id="panel-saved">
-            <div class="empty-state">
+            {% if saved_sets %}
+            <div class="saved-sets-list" id="savedSetsList">
+                {% for s in saved_sets %}
+                <div class="saved-set-card" id="set-{{ s.id }}">
+                    <div class="saved-set-info">
+                        <span class="saved-set-name editable-name"
+                              data-set-id="{{ s.id }}"
+                              title="Hover to rename"
+                              onmouseenter="startInlineRename(this)">{{ s.name }}</span>
+                        <div class="saved-set-meta">
+                            <span class="set-badge">{{ s.question_count }} Qs</span>
+                            <span class="set-badge">{{ s.detected_type | upper }}</span>
+                            <span class="set-badge">{{ s.settings.difficulty | capitalize }}</span>
+                        </div>
+                    </div>
+                    <div class="saved-set-btns">
+                        <form method="POST" action="{{ url_for('load_set', code=room.code, set_id=s.id) }}">
+                            <button type="submit" class="set-play-btn">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                Play
+                            </button>
+                        </form>
+                        <div class="set-menu-wrap">
+                            <button class="set-menu-btn" onclick="toggleMenu('{{ s.id }}', event)" title="More options">⋮</button>
+                            <div class="set-menu-dropdown" id="menu-{{ s.id }}" style="display:none">
+                                <a href="{{ url_for('edit_saved_set', set_id=s.id) }}?room={{ room.code }}" class="set-menu-item">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                    Edit
+                                </a>
+                                <button class="set-menu-item set-menu-item-delete" onclick="deleteSet('{{ s.id }}', this)">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state" id="emptyState">
                 <div class="empty-icon">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 </div>
                 <h3>No saved sets yet</h3>
-                <p>Question sets from previous games will appear here once saving is supported.</p>
+                <p>Save a question set at the end of a game — it'll appear here for future use.</p>
             </div>
+            {% endif %}
         </div>
 
     </div>
@@ -131,14 +176,27 @@ Examples: 'The French Revolution', 'Python basics', 'Our Q3 earnings call transc
 
 {% block scripts %}
 <script>
-// Tabs
+// Tabs — data-href tabs navigate; data-tab tabs switch panels
 document.querySelectorAll('.setup-tab').forEach(tab => {
     tab.addEventListener('click', () => {
+        if (tab.dataset.href) { window.location.href = tab.dataset.href; return; }
         document.querySelectorAll('.setup-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.setup-panel').forEach(p => p.classList.add('hidden'));
         tab.classList.add('active');
         document.getElementById('panel-' + tab.dataset.tab).classList.remove('hidden');
     });
+});
+
+// ⋮ menu
+function toggleMenu(setId, e) {
+    e.stopPropagation();
+    const menu = document.getElementById('menu-' + setId);
+    const isOpen = menu.style.display !== 'none';
+    document.querySelectorAll('.set-menu-dropdown').forEach(m => m.style.display = 'none');
+    menu.style.display = isOpen ? 'none' : 'block';
+}
+document.addEventListener('click', () => {
+    document.querySelectorAll('.set-menu-dropdown').forEach(m => m.style.display = 'none');
 });
 
 // Question type
@@ -181,5 +239,122 @@ document.getElementById('material-file').addEventListener('change', function () 
         document.querySelector('.setup-textarea').removeAttribute('required');
     }
 });
+
+// Inline set rename
+function startInlineRename(span) {
+    if (span.dataset.editing) return;
+    span.dataset.editing = '1';
+    const setId    = span.dataset.setId;
+    const original = span.textContent.trim();
+
+    const input = document.createElement('input');
+    input.type      = 'text';
+    input.className = 'set-name-input';
+    input.value     = original;
+
+    function sizeInput() {
+        input.style.width = Math.max(input.value.length, 2) + 'ch';
+    }
+    sizeInput();
+    input.addEventListener('input', () => { input.dataset.dirty = '1'; sizeInput(); });
+
+    // Replace span; fade in on next frame so the CSS transition fires
+    span.replaceWith(input);
+    requestAnimationFrame(() => {
+        input.style.opacity = '1';
+        input.focus();
+    });
+
+    function revertSpan(name) {
+        const s2 = document.createElement('span');
+        s2.className     = 'saved-set-name editable-name';
+        s2.dataset.setId = setId;
+        s2.title         = 'Hover to rename';
+        s2.textContent   = name;
+        s2.onmouseenter  = () => startInlineRename(s2);
+        input.replaceWith(s2);
+    }
+
+    function fadeOut(name) {
+        input.style.opacity = '0';
+        setTimeout(() => revertSpan(name), 180);
+    }
+
+    let done = false;
+    async function commit() {
+        if (done) return;
+        done = true;
+        const newName = input.value.trim() || original;
+        fadeOut(newName);
+        if (newName === original) return;
+        try {
+            const res  = await fetch(`/api/saved_sets/${setId}/rename`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: newName}),
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                const s = document.querySelector(`[data-set-id="${setId}"]`);
+                if (s) s.textContent = original;
+                alert(data.error || 'Rename failed.');
+            }
+        } catch(e) {
+            const s = document.querySelector(`[data-set-id="${setId}"]`);
+            if (s) s.textContent = original;
+        }
+    }
+
+    function cancel() {
+        if (done) return;
+        done = true;
+        fadeOut(original);
+    }
+
+    // Mouse leaves without typing → fade out and revert quietly
+    input.addEventListener('mouseleave', () => {
+        if (!input.dataset.dirty) cancel();
+    });
+
+    input.addEventListener('blur', () => {
+        // Only commit on blur if user actually typed something;
+        // mouseleave already handles the no-change case
+        if (input.dataset.dirty) commit(); else cancel();
+    });
+
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  { e.preventDefault(); commit(); }
+        if (e.key === 'Escape') { cancel(); }
+    });
+}
+
+// Delete saved set
+async function deleteSet(setId, btn) {
+    if (!confirm('Delete this question set?')) return;
+    btn.disabled = true;
+    try {
+        const res  = await fetch(`/api/saved_sets/${setId}/delete`, {method: 'POST'});
+        const data = await res.json();
+        if (data.ok) {
+            document.getElementById('set-' + setId).remove();
+            // Show empty state if no cards left
+            if (!document.querySelector('.saved-set-card')) {
+                document.getElementById('savedSetsList').innerHTML =
+                    `<div class="empty-state">
+                        <div class="empty-icon">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        </div>
+                        <h3>No saved sets yet</h3>
+                        <p>Save a question set at the end of a game — it'll appear here for future use.</p>
+                    </div>`;
+            }
+        } else {
+            btn.disabled = false;
+            alert(data.error || 'Delete failed.');
+        }
+    } catch (e) {
+        btn.disabled = false;
+        console.error('delete error', e);
+    }
+}
 </script>
 {% endblock %}
