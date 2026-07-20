@@ -17,3 +17,11 @@
 __pycache__/
 # Ignored by the build system
 /setup.cfg
+# Local dev-mode storage — production uses Firestore (DEV_MODE=false).
+# NOTE: .env is deliberately NOT ignored; production reads SECRET_KEY and the
+# API keys from it, and it is gitignored so it never reaches GitHub.
+users.json
+saved_sets.json
+.DS_Store
+_test_editor.py
+CLAUDE.md
