@@ -77,17 +77,66 @@ function renderPlayers(players) {
     `).join('');
 }
 
+// Each poll is a Firestore read, and a lobby is designed to sit open while
+// players trickle in — so an unattended tab is the main cost risk here.
+// Polling stops entirely when the tab is hidden, and slows down once the
+// player list has been quiet for a while.
+const FAST_MS       = 2500;
+const SLOW_MS       = 10000;
+const IDLE_AFTER_MS = 5 * 60 * 1000;
+
+let timerId       = null;
+let lastChangeAt  = Date.now();
+let lastSignature = null;
+
+function currentInterval() {
+    return (Date.now() - lastChangeAt > IDLE_AFTER_MS) ? SLOW_MS : FAST_MS;
+}
+
+function stopPolling() {
+    clearTimeout(timerId);
+    timerId = null;
+}
+
+function schedulePoll() {
+    clearTimeout(timerId);
+    // Hidden tabs don't poll at all — visibilitychange resumes them
+    if (document.hidden) return;
+    timerId = setTimeout(pollPlayers, currentInterval());
+}
+
 async function pollPlayers() {
     try {
         const res = await fetch(`/api/room/${roomCode}/players`);
         const data = await res.json();
-        if (data.players) renderPlayers(data.players);
+        if (data.players) {
+            // Any change to the roster means things are happening — go fast again
+            const signature = data.players.map(p => p.id).join(',');
+            if (signature !== lastSignature) {
+                lastSignature = signature;
+                lastChangeAt = Date.now();
+            }
+            renderPlayers(data.players);
+        }
         if (data.status === 'active') {
+            stopPolling();
             window.location.href = `/room/${roomCode}/game`;
+            return;
         }
     } catch (e) { /* server temporarily unreachable */ }
+    schedulePoll();
 }
 
-setInterval(pollPlayers, 2500);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopPolling();
+    } else {
+        // Back in view: check immediately and return to the fast cadence
+        lastChangeAt = Date.now();
+        pollPlayers();
+    }
+});
+
+schedulePoll();
 </script>
 {% endblock %}
