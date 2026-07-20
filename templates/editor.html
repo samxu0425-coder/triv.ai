@@ -68,6 +68,18 @@
         </div>
       </div>
 
+      <!-- Time -->
+      <div class="qp-field">
+        <label class="qp-label">Time for this question</label>
+        <div class="qp-time-row">
+          <input type="number" class="qp-time-input" id="qpTime"
+                 min="5" max="300" step="5" oninput="onTimeInput()">
+          <span class="qp-time-unit">seconds</span>
+          <button class="qp-time-reset" id="qpTimeReset" onclick="resetTime()"
+                  title="Use the set default">Reset to default</button>
+        </div>
+      </div>
+
       <!-- Question text -->
       <div class="qp-field">
         <label class="qp-label">Question</label>
@@ -130,6 +142,7 @@ const MODE       = "{{ mode }}";
 const ROOM_CODE  = "{{ room.code if room else '' }}";
 const SET_ID     = "{{ set_id or '' }}";
 const RETURN_URL = "{{ return_url }}";
+const DEFAULT_TIME = Number('{{ default_time }}');
 
 let questions    = JSON.parse(document.getElementById('questions-data').textContent);
 let currentIndex = -1;
@@ -175,9 +188,11 @@ function renderStrip() {
   const strip = document.getElementById('qstrip');
   const chips = questions.map((q, i) => {
     const lbl = {mcq:'MCQ', multi:'Multi', frq:'FRQ'}[q.type] || '?';
+    const t   = (q.time != null && q.time !== '') ? `<span class="qchip-time">${q.time}s</span>` : '';
     return `<button class="qchip${i === currentIndex ? ' active' : ''}" onclick="selectQuestion(${i})">
       <span class="qchip-num">Q${i+1}</span>
       <span class="qchip-type">${lbl}</span>
+      ${t}
     </button>`;
   });
   chips.push(`<button class="qchip qchip-add" title="Add question" onclick="addQuestion()">
@@ -210,7 +225,7 @@ function showEmpty(show) {
 // ── Add / Delete ──────────────────────────────────────────
 function addQuestion() {
   if (currentIndex >= 0) saveEdits();
-  questions.push({question:'', type:'mcq', choices:['','','',''], answer:'', rubric:[], _ansIdx:null});
+  questions.push({question:'', type:'mcq', choices:['','','',''], answer:'', rubric:[], _ansIdx:null, time:null});
   currentIndex = questions.length - 1;
   renderStrip(); showEmpty(false); renderPanel();
   document.getElementById('qpText').focus();
@@ -231,6 +246,7 @@ function renderPanel() {
   document.getElementById('prevBtn').disabled       = currentIndex === 0;
   document.getElementById('nextBtn').disabled       = currentIndex === questions.length - 1;
   document.getElementById('qpText').value           = q.question;
+  renderTime(q);
 
   document.querySelectorAll('.qp-type-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.type === q.type));
@@ -242,6 +258,40 @@ function renderPanel() {
   if (q.type === 'mcq')   { document.getElementById('mcqPanel').style.display   = 'block'; renderMCQ(q); }
   if (q.type === 'multi') { document.getElementById('multiPanel').style.display = 'block'; renderMulti(q); }
   if (q.type === 'frq')   { document.getElementById('frqPanel').style.display   = 'block'; renderFRQ(q); }
+}
+
+// ── Time ──────────────────────────────────────────────────
+// q.time is only set when the host overrides the set default.
+function renderTime(q) {
+  const input   = document.getElementById('qpTime');
+  const resetEl = document.getElementById('qpTimeReset');
+  const custom  = q.time != null && q.time !== '';
+  input.value       = custom ? q.time : DEFAULT_TIME;
+  input.classList.toggle('is-default', !custom);
+  resetEl.style.display = custom ? 'inline-block' : 'none';
+}
+
+function onTimeInput() {
+  const q = questions[currentIndex];
+  const raw = document.getElementById('qpTime').value;
+  q.time = raw === '' ? null : parseInt(raw, 10);
+  document.getElementById('qpTimeReset').style.display = 'inline-block';
+  document.getElementById('qpTime').classList.remove('is-default');
+  renderStrip();
+}
+
+function resetTime() {
+  const q = questions[currentIndex];
+  q.time = null;
+  renderTime(q);
+  renderStrip();
+}
+
+// Clamp to the range the server enforces, so what you see is what runs.
+function normTime(t) {
+  const n = parseInt(t, 10);
+  if (isNaN(n)) return null;
+  return Math.max(5, Math.min(300, n));
 }
 
 // ── MCQ ───────────────────────────────────────────────────
@@ -420,6 +470,8 @@ async function saveAsSet() {
 
   const payload = questions.map(q => {
     const out = {question:q.question, type:q.type, choices:q.choices, answer:q.answer};
+    const t = normTime(q.time);
+    if (t != null) out.time = t;
     if (q.type === 'frq' && q.rubric && q.rubric.length) out.rubric = q.rubric;
     return out;
   });
@@ -429,7 +481,7 @@ async function saveAsSet() {
   try {
     const res  = await fetch(`/room/${ROOM_CODE}/save_as_set`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({questions: payload, set_name: setName}),
+      body: JSON.stringify({questions: payload, set_name: setName, time_per_q: DEFAULT_TIME}),
     });
     const data = await res.json();
     if (data.ok) { window.location.href = data.redirect || RETURN_URL; }
@@ -455,6 +507,8 @@ async function saveAll() {
 
   const payload = questions.map(q => {
     const out = {question:q.question, type:q.type, choices:q.choices, answer:q.answer};
+    const t = normTime(q.time);
+    if (t != null) out.time = t;
     if (q.type === 'frq' && q.rubric && q.rubric.length) out.rubric = q.rubric;
     return out;
   });
@@ -465,7 +519,7 @@ async function saveAll() {
 
   try {
     const nameEl = document.getElementById('setNameInput');
-    const body = {questions: payload, set_name: nameEl ? nameEl.value.trim() : ''};
+    const body = {questions: payload, set_name: nameEl ? nameEl.value.trim() : '', time_per_q: DEFAULT_TIME};
     const url  = MODE === 'build' ? `/room/${ROOM_CODE}/build` : `/saved_sets/${SET_ID}/update`;
     const res  = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
     const data = await res.json();

@@ -97,10 +97,142 @@ else:
         return ref.id
 
 # ---------------------------------------------------------------------------
-# Room storage — in-memory (resets on restart, same as _users in dev mode)
+# Room storage
+#   dev  — in-memory dict (resets on restart)
+#   prod — Firestore `rooms` collection, doc id = room code
+#
+# Routes follow a read-modify-write shape: room = get_room(code) → mutate →
+# save_room(room). Whole-document writes keep nested mutations (players,
+# answers, scores) intact. Paths where several players can write at the same
+# moment use transactions instead — see submit_answer and join_room.
 # ---------------------------------------------------------------------------
-_rooms = {}
-QUESTION_TIME = 20   # seconds per question
+if DEV_MODE:
+    _rooms = {}
+
+    def get_room(code):
+        return _rooms.get(code)
+
+    def save_room(room):
+        _rooms[room['code']] = room
+
+    def set_room_fields(code, **fields):
+        room = _rooms.get(code)
+        if room is not None:
+            room.update(fields)
+
+    def record_answer(code, q_idx, player_id, answer, points, grade=None):
+        room = _rooms.get(code)
+        if room is None:
+            return
+        key = str(q_idx)
+        room['answers'].setdefault(key, {})[player_id] = answer
+        room['scores'][player_id] = room['scores'].get(player_id, 0) + points
+        if grade is not None:
+            room['grades'].setdefault(key, {})[player_id] = grade
+
+    def delete_room(code):
+        _rooms.pop(code, None)
+
+else:
+    def get_room(code):
+        doc = db.collection('rooms').document(code).get()
+        return doc.to_dict() if doc.exists else None
+
+    def save_room(room):
+        db.collection('rooms').document(room['code']).set(room)
+
+    def set_room_fields(code, **fields):
+        """Patch individual fields — avoids clobbering concurrent writes."""
+        db.collection('rooms').document(code).update(fields)
+
+    def record_answer(code, q_idx, player_id, answer, points, grade=None):
+        """Write one player's answer via field-level updates.
+
+        Deliberately not a transaction: every player answers the same document
+        at once, and read-modify-write transactions contend hard enough to
+        exhaust their retries and drop answers. Dotted-path writes touch only
+        this player's fields, and Increment applies server-side, so concurrent
+        submits can't clobber each other regardless of how many arrive together.
+        """
+        key = str(q_idx)
+        updates = {
+            f'answers.{key}.{player_id}': answer,
+            f'scores.{player_id}': firestore.Increment(points),
+        }
+        if grade is not None:
+            updates[f'grades.{key}.{player_id}'] = grade
+        db.collection('rooms').document(code).update(updates)
+
+    def delete_room(code):
+        db.collection('rooms').document(code).delete()
+
+
+class RoomAbort(Exception):
+    """Raised inside an atomic mutation to cancel the write and return a result."""
+    def __init__(self, payload):
+        self.payload = payload
+
+
+if DEV_MODE:
+    def update_room_atomic(code, mutate):
+        """Read-modify-write. Single-threaded dev mode needs no real locking."""
+        room = _rooms.get(code)
+        if room is None:
+            return None, None
+        try:
+            result = mutate(room)
+        except RoomAbort as abort:
+            return room, abort.payload
+        _rooms[code] = room
+        return room, result
+
+else:
+    def update_room_atomic(code, mutate):
+        """Read-modify-write inside a Firestore transaction.
+
+        Firestore retries the whole callback on contention, so `mutate` must be
+        free of side effects outside `room` — it can be called more than once.
+        """
+        ref = db.collection('rooms').document(code)
+
+        @firestore.transactional
+        def _txn(transaction):
+            snap = ref.get(transaction=transaction)
+            if not snap.exists:
+                return None, None
+            room = snap.to_dict()
+            try:
+                result = mutate(room)
+            except RoomAbort as abort:
+                return room, abort.payload
+            transaction.set(ref, room)
+            return room, result
+
+        return _txn(db.transaction())
+
+
+QUESTION_TIME = 20   # fallback seconds per question
+MIN_Q_TIME, MAX_Q_TIME = 5, 300
+
+
+def clamp_q_time(value, fallback=QUESTION_TIME):
+    """Coerce a user-supplied time to a sane number of seconds."""
+    try:
+        return max(MIN_Q_TIME, min(MAX_Q_TIME, int(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def question_time(room, idx=None):
+    """Seconds for a question: per-question override → room default → global."""
+    if idx is None:
+        idx = room.get('current_q', 0)
+    questions = room.get('questions', [])
+    if 0 <= idx < len(questions):
+        override = questions[idx].get('time')
+        if override:
+            return clamp_q_time(override)
+    return clamp_q_time(room.get('settings', {}).get('time_per_q'))
 
 # ---------------------------------------------------------------------------
 # Saved question sets
@@ -333,16 +465,17 @@ def create_room():
         return redirect(url_for('login'))
 
     code = generate_room_code()
-    while code in _rooms:
+    while get_room(code) is not None:
         code = generate_room_code()
 
-    _rooms[code] = {
+    save_room({
         'code': code,
         'host_id': session['user_id'],
         'host_name': session['display_name'],
         'status': 'lobby',
         'players': [{'id': session['user_id'], 'name': session['display_name'], 'is_host': True}],
-    }
+        'created_at': time.time(),
+    })
     session['room_code'] = code
     session['is_host'] = True
     return redirect(url_for('setup', code=code))
@@ -357,21 +490,25 @@ def join_room():
         flash('Room code and display name are required', 'error')
         return redirect(url_for('play'))
 
-    if code not in _rooms:
-        flash('Room not found. Double-check the code.', 'error')
-        return redirect(url_for('play'))
-
-    room = _rooms[code]
-    if room['status'] != 'lobby':
-        flash('This game has already started.', 'error')
-        return redirect(url_for('play'))
-
     # Logged-in user ID or generate a guest ID
     player_id = session.get('user_id') or session.setdefault('guest_id', secrets.token_hex(8))
 
-    # Prevent duplicate joins
-    if player_id not in [p['id'] for p in room['players']]:
-        room['players'].append({'id': player_id, 'name': display_name, 'is_host': False})
+    def add_player(room):
+        if room['status'] != 'lobby':
+            raise RoomAbort('started')
+        # Prevent duplicate joins
+        if player_id not in [p['id'] for p in room['players']]:
+            room['players'].append({'id': player_id, 'name': display_name, 'is_host': False})
+        return 'joined'
+
+    room, result = update_room_atomic(code, add_player)
+
+    if room is None:
+        flash('Room not found. Double-check the code.', 'error')
+        return redirect(url_for('play'))
+    if result == 'started':
+        flash('This game has already started.', 'error')
+        return redirect(url_for('play'))
 
     session['room_code'] = code
     session['is_host'] = False
@@ -383,30 +520,31 @@ def join_room():
 
 @app.route('/room/<code>/lobby')
 def lobby(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
 
-    room = _rooms[code]
     is_host = session.get('is_host', False) and session.get('room_code') == code
     return render_template('lobby.html', room=room, is_host=is_host)
 
 
 @app.route('/api/room/<code>/players')
 def room_players(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    room = _rooms[code]
     return jsonify({'players': room['players'], 'status': room['status']})
 
 
 @app.route('/room/<code>/setup')
 def setup(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
 
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         flash('Only the host can set up the game.', 'error')
         return redirect(url_for('lobby', code=code))
 
@@ -414,7 +552,7 @@ def setup(code):
     for s in user_sets:
         types = {q.get('type', 'mcq') for q in s.get('questions', [])}
         s['detected_type'] = types.pop() if len(types) == 1 else 'mix'
-    return render_template('setup.html', room=_rooms[code], saved_sets=user_sets)
+    return render_template('setup.html', room=room, saved_sets=user_sets)
 
 
 def read_uploaded_file(file):
@@ -553,11 +691,12 @@ def call_ai(topic, question_type, difficulty, count):
 
 @app.route('/room/<code>/generate', methods=['POST'])
 def generate_questions(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
 
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         flash('Only the host can generate questions.', 'error')
         return redirect(url_for('lobby', code=code))
 
@@ -565,6 +704,7 @@ def generate_questions(code):
     question_type = request.form.get('question_type', 'mcq')
     difficulty    = request.form.get('difficulty', 'medium')
     count         = int(request.form.get('count', 10))
+    time_per_q    = clamp_q_time(request.form.get('time_per_q'))
 
     # Append uploaded file content to topic
     file = request.files.get('material_file')
@@ -577,36 +717,45 @@ def generate_questions(code):
         flash('Please enter a topic or upload a file.', 'error')
         return redirect(url_for('setup', code=code))
 
-    _rooms[code]['settings'] = {
-        'topic': topic,
-        'question_type': question_type,
-        'difficulty': difficulty,
-        'count': count,
-    }
-
+    # AI call is slow — run it before touching storage so a failure leaves the
+    # room untouched, and so we never hold a transaction across the network.
     try:
         questions = call_ai(topic, question_type, difficulty, count)
-        _rooms[code]['questions'] = questions
-        flash(f'{len(questions)} questions generated!', 'success')
     except Exception as e:
         app.logger.error(f'Generation error: {e}')
         flash('Failed to generate questions. Please try again.', 'error')
         return redirect(url_for('setup', code=code))
+
+    # Stamp the chosen time on each question so it survives into saved sets
+    for q in questions:
+        q['time'] = time_per_q
+
+    room['settings'] = {
+        'topic': topic,
+        'question_type': question_type,
+        'difficulty': difficulty,
+        'count': count,
+        'time_per_q': time_per_q,
+    }
+    room['questions'] = questions
+    room['questions_saved'] = False
+    save_room(room)
+    flash(f'{len(questions)} questions generated!', 'success')
 
     return redirect(url_for('lobby', code=code))
 
 
 @app.route('/room/<code>/start', methods=['POST'])
 def start_game(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
 
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         flash('Only the host can start the game.', 'error')
         return redirect(url_for('lobby', code=code))
 
-    room = _rooms[code]
     if not room.get('questions'):
         flash('Generate questions first.', 'error')
         return redirect(url_for('lobby', code=code))
@@ -615,12 +764,16 @@ def start_game(code):
     room['current_q'] = 0
     room['q_start_time'] = time.time()
     room['scores'] = {p['id']: 0 for p in room['players']}
-    room['answers'] = [{} for _ in room['questions']]
-    room['grades']  = [{} for _ in room['questions']]
+    # Keyed by question index as a string — Firestore can't address list
+    # elements by position, and per-field writes are what keep concurrent
+    # answers from clobbering each other.
+    room['answers'] = {str(i): {} for i in range(len(room['questions']))}
+    room['grades']  = {str(i): {} for i in range(len(room['questions']))}
     room['revealed'] = False
     room['paused'] = False
     # Preserve questions_saved=True if questions came from a saved set
     room.setdefault('questions_saved', False)
+    save_room(room)
 
     return redirect(url_for('game', code=code))
 
@@ -631,10 +784,10 @@ def start_game(code):
 
 @app.route('/room/<code>/game')
 def game(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
-    room = _rooms[code]
     if room['status'] not in ('active', 'ended'):
         return redirect(url_for('lobby', code=code))
     player_id = session.get('user_id') or session.get('guest_id', '')
@@ -655,10 +808,10 @@ def _scores_list(room):
 
 @app.route('/api/room/<code>/state')
 def room_state(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
 
-    room = _rooms[code]
     player_id = session.get('user_id') or session.get('guest_id', '')
 
     if room['status'] == 'lobby':
@@ -677,23 +830,27 @@ def room_state(code):
     else:
         elapsed = time.time() - room.get('q_start_time', time.time())
 
-    time_left = max(0, QUESTION_TIME - int(elapsed))
+    q_time = question_time(room, current_q)
+    time_left = max(0, q_time - int(elapsed))
 
     if revealed:
         time_left = 0          # freeze timer once answer is shown
     elif time_left == 0 and not paused:
+        # Timer expired — persist the reveal so every poller agrees.
+        # Patch just this field; concurrent pollers converge on the same value.
         room['revealed'] = True
         revealed = True
+        set_room_fields(code, revealed=True)
 
     q = questions[current_q] if current_q < len(questions) else None
-    my_answer = room['answers'][current_q].get(player_id) if q else None
+    q_key = str(current_q)
+    answers_for_q = room.get('answers', {}).get(q_key, {})
+    my_answer = answers_for_q.get(player_id) if q else None
 
     # FRQ grade revealed to the player only when answer is shown
     my_frq_grade = None
     if revealed and q and q.get('type') == 'frq':
-        grades = room.get('grades', [])
-        if current_q < len(grades):
-            my_frq_grade = grades[current_q].get(player_id)
+        my_frq_grade = room.get('grades', {}).get(q_key, {}).get(player_id)
 
     response = {
         'status': 'active',
@@ -702,10 +859,11 @@ def room_state(code):
         'revealed': revealed,
         'paused': paused,
         'time_left': time_left,
+        'q_time': q_time,
         'my_answer': my_answer,
         'my_frq_grade': my_frq_grade,
         'scores': _scores_list(room),
-        'answers_in': len(room['answers'][current_q]) if q else 0,
+        'answers_in': len(answers_for_q) if q else 0,
         'total_players': len(room['players']),
     }
 
@@ -775,10 +933,10 @@ def grade_frq_answer(question, student_answer):
 
 @app.route('/room/<code>/answer', methods=['POST'])
 def submit_answer(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
 
-    room = _rooms[code]
     if room['status'] != 'active':
         return jsonify({'error': 'Game not active'}), 400
 
@@ -787,7 +945,7 @@ def submit_answer(code):
         return jsonify({'error': 'Not in game'}), 401
 
     current_q = room['current_q']
-    if room['answers'][current_q].get(player_id) is not None:
+    if room.get('answers', {}).get(str(current_q), {}).get(player_id) is not None:
         return jsonify({'error': 'Already answered'}), 400
 
     data = request.get_json(silent=True) or {}
@@ -801,85 +959,93 @@ def submit_answer(code):
 
     # Points scale linearly from MAX_PTS (instant) down to MIN_PTS (last second)
     MAX_PTS, MIN_PTS = 1000, 200
-    time_ratio  = max(0.0, (QUESTION_TIME - elapsed) / QUESTION_TIME)
+    q_time      = question_time(room, current_q)
+    time_ratio  = max(0.0, (q_time - elapsed) / q_time)
     base_points = int(MIN_PTS + (MAX_PTS - MIN_PTS) * time_ratio)
 
-    room['answers'][current_q][player_id] = answer
-
+    # Work out the outcome before opening a transaction — FRQ grading is a
+    # network call and must not be held open (or retried) inside one.
+    grade = None
     if q['type'] == 'mcq':
         is_correct = str(answer).strip().lower() == str(correct).strip().lower()
         points = base_points if is_correct else 0
-        room['scores'][player_id] = room['scores'].get(player_id, 0) + points
-        return jsonify({'correct': is_correct, 'points': points})
-
     elif q['type'] == 'multi':
         is_correct = set(answer) == set(correct) if isinstance(correct, list) else False
         points = base_points if is_correct else 0
-        room['scores'][player_id] = room['scores'].get(player_id, 0) + points
-        return jsonify({'correct': is_correct, 'points': points})
-
     elif q['type'] == 'frq':
-        # Grade via AI — result stored, revealed only when host shows answer
         grade = grade_frq_answer(q, str(answer))
-        score_pct = grade['score_pct']
         # Speed sets the ceiling; FRQ grade percentage scales it down
-        points = int(base_points * score_pct / 100)
-        room['scores'][player_id] = room['scores'].get(player_id, 0) + points
-        room['grades'][current_q][player_id] = {
-            'score_pct': score_pct,
+        points = int(base_points * grade['score_pct'] / 100)
+        is_correct = None
+    else:
+        return jsonify({'correct': False, 'points': 0})
+
+    grade_record = None
+    if grade is not None:
+        grade_record = {
+            'score_pct': grade['score_pct'],
             'points': points,
             'triggered': grade.get('triggered', []),
         }
-        return jsonify({'submitted': True, 'pending_reveal': True})
 
-    return jsonify({'correct': False, 'points': 0})
+    record_answer(code, current_q, player_id, answer, points, grade_record)
+
+    if q['type'] == 'frq':
+        return jsonify({'submitted': True, 'pending_reveal': True})
+    return jsonify({'correct': is_correct, 'points': points})
 
 
 @app.route('/room/<code>/skip', methods=['POST'])
 def skip_question(code):
     """Host force-reveals the current question without advancing."""
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can skip'}), 403
-    _rooms[code]['revealed'] = True
+    set_room_fields(code, revealed=True)
     return jsonify({'ok': True})
 
 
 @app.route('/room/<code>/pause', methods=['POST'])
 def pause_game(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can pause'}), 403
-    room = _rooms[code]
     if not room.get('paused') and not room.get('revealed'):
-        room['paused_elapsed'] = time.time() - room.get('q_start_time', time.time())
-        room['paused'] = True
+        set_room_fields(code,
+            paused_elapsed=time.time() - room.get('q_start_time', time.time()),
+            paused=True,
+        )
     return jsonify({'ok': True})
 
 
 @app.route('/room/<code>/resume', methods=['POST'])
 def resume_game(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can resume'}), 403
-    room = _rooms[code]
     if room.get('paused'):
-        room['q_start_time'] = time.time() - room.get('paused_elapsed', 0)
-        room['paused'] = False
+        set_room_fields(code,
+            q_start_time=time.time() - room.get('paused_elapsed', 0),
+            paused=False,
+        )
     return jsonify({'ok': True})
 
 
 @app.route('/room/<code>/end', methods=['POST'])
 def end_game(code):
     """Host ends the game early."""
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can end game'}), 403
-    _rooms[code]['status'] = 'ended'
+    set_room_fields(code, status='ended')
     return jsonify({'status': 'ended'})
 
 
@@ -887,12 +1053,12 @@ def end_game(code):
 def save_set(code):
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can save'}), 403
 
-    room = _rooms[code]
     if not room.get('questions'):
         return jsonify({'error': 'No questions to save'}), 400
 
@@ -908,16 +1074,17 @@ def save_set(code):
         settings=room.get('settings', {}),
         questions=room['questions'],
     )
-    _rooms[code]['questions_saved'] = True
+    set_room_fields(code, questions_saved=True)
     return jsonify({'ok': True, 'id': set_id})
 
 
 @app.route('/room/<code>/load_set/<set_id>', methods=['POST'])
 def load_set(code, set_id):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         flash('Only the host can load a set.', 'error')
         return redirect(url_for('setup', code=code))
 
@@ -926,9 +1093,11 @@ def load_set(code, set_id):
         flash('Saved set not found.', 'error')
         return redirect(url_for('setup', code=code))
 
-    _rooms[code]['questions'] = s['questions']
-    _rooms[code]['settings'] = s['settings']
-    _rooms[code]['questions_saved'] = True   # already saved — don't offer to save again
+    set_room_fields(code,
+        questions=s['questions'],
+        settings=s['settings'],
+        questions_saved=True,   # already saved — don't offer to save again
+    )
     flash(f'Loaded "{s["name"]}" — {len(s["questions"])} questions ready!', 'success')
     return redirect(url_for('lobby', code=code))
 
@@ -945,23 +1114,25 @@ def delete_set_route(set_id):
 
 @app.route('/room/<code>/next', methods=['POST'])
 def next_question(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
 
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can advance'}), 403
 
-    room = _rooms[code]
     room['current_q'] += 1
 
     if room['current_q'] >= len(room['questions']):
         room['status'] = 'ended'
+        save_room(room)
         return jsonify({'status': 'ended'})
 
     room['q_start_time'] = time.time()
     room['revealed'] = False
     room['paused'] = False
     room.pop('paused_elapsed', None)
+    save_room(room)
     return jsonify({'status': 'active', 'current_q': room['current_q']})
 
 
@@ -984,15 +1155,17 @@ def rename_set(set_id):
 
 @app.route('/room/<code>/build', methods=['GET'])
 def build_questions(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         flash('Room not found.', 'error')
         return redirect(url_for('play'))
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         flash('Only the host can build questions.', 'error')
         return redirect(url_for('lobby', code=code))
     return render_template('editor.html',
-        mode='build', room=_rooms[code],
+        mode='build', room=room,
         questions_json='[]', set_id=None, set_name='',
+        default_time=clamp_q_time(room.get('settings', {}).get('time_per_q')),
         return_url=url_for('setup', code=code),
     )
 
@@ -1002,9 +1175,10 @@ def save_as_set_route(code):
     """Save manually-built questions as a new saved set without loading into the game."""
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only the host can save'}), 403
     data = request.get_json(silent=True) or {}
     questions = data.get('questions', [])
@@ -1013,10 +1187,13 @@ def save_as_set_route(code):
         return jsonify({'error': 'Set name is required'}), 400
     if not questions:
         return jsonify({'error': 'No questions provided'}), 400
-    settings = _rooms[code].get('settings') or {
+    settings = room.get('settings') or {
         'topic': 'Manual Build', 'question_type': 'mix',
         'difficulty': 'custom', 'count': len(questions),
     }
+    # Carry the set-level default through, so questions without an override
+    # still run at the host's chosen time rather than the global fallback.
+    settings.setdefault('time_per_q', clamp_q_time(data.get('time_per_q')))
     _save_set_to_file(
         user_id=session['user_id'],
         name=name, settings=settings, questions=questions,
@@ -1026,22 +1203,26 @@ def save_as_set_route(code):
 
 @app.route('/room/<code>/build', methods=['POST'])
 def save_built_questions(code):
-    if code not in _rooms:
+    room = get_room(code)
+    if room is None:
         return jsonify({'error': 'Room not found'}), 404
-    if session.get('user_id') != _rooms[code]['host_id']:
+    if session.get('user_id') != room['host_id']:
         return jsonify({'error': 'Only host can build questions'}), 403
     data = request.get_json(silent=True) or {}
     questions = data.get('questions', [])
     if not questions:
         return jsonify({'error': 'No questions provided'}), 400
-    _rooms[code]['questions'] = questions
-    _rooms[code]['settings'] = {
-        'topic': 'Manual Build',
-        'question_type': 'mix',
-        'difficulty': 'custom',
-        'count': len(questions),
-    }
-    _rooms[code]['questions_saved'] = False
+    set_room_fields(code,
+        questions=questions,
+        settings={
+            'topic': 'Manual Build',
+            'question_type': 'mix',
+            'difficulty': 'custom',
+            'count': len(questions),
+            'time_per_q': clamp_q_time(data.get('time_per_q')),
+        },
+        questions_saved=False,
+    )
     return jsonify({'ok': True, 'redirect': url_for('lobby', code=code)})
 
 
@@ -1054,11 +1235,12 @@ def edit_saved_set(set_id):
         flash('Set not found.', 'error')
         return redirect(url_for('play'))
     room_code = request.args.get('room', '')
-    return_url = url_for('setup', code=room_code) if room_code and room_code in _rooms else url_for('play')
+    return_url = url_for('setup', code=room_code) if room_code and get_room(room_code) else url_for('play')
     return render_template('editor.html',
         mode='edit', room=None,
         questions_json=json.dumps(s['questions']),
         set_id=set_id, set_name=s['name'],
+        default_time=clamp_q_time(s.get('settings', {}).get('time_per_q')),
         return_url=return_url,
     )
 
