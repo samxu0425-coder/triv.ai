@@ -1,8 +1,11 @@
 runtime: python311
 
 env_variables:
-  SECRET_KEY: "change-this-in-production"
-  # ANTHROPIC_API_KEY: set via Secret Manager in production
+  # Firestore-backed storage. Leave unset locally to keep using JSON files.
+  DEV_MODE: "false"
+  # SECRET_KEY and API keys live in .env — gitignored, but uploaded on deploy
+  # and read by load_dotenv(). Never put secrets in this file: it is tracked
+  # by git and published to GitHub.
 
 handlers:
 - url: /static

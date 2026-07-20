@@ -107,6 +107,16 @@ Examples: 'The French Revolution', 'Python basics', 'Our Q3 earnings call transc
                                class="count-slider" min="5" max="30" value="10" step="1">
                         <div class="count-labels"><span>5</span><span>30</span></div>
                     </div>
+
+                    <div class="setup-field">
+                        <label class="setup-label">Time per question</label>
+                        <div class="time-input-row">
+                            <input type="number" name="time_per_q" id="time-per-q"
+                                   class="time-input" min="5" max="300" value="20" step="5">
+                            <span class="time-unit">seconds</span>
+                        </div>
+                        <p class="time-hint">Applies to every question — you can override individual ones in the editor.</p>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn-generate" id="generateBtn">

@@ -746,6 +746,28 @@ h2 { color: #111; margin-bottom: 1.5rem; font-size: 1.6rem; }
     text-align: center;
 }
 
+/* Time per question (setup) */
+.time-input-row { display: flex; align-items: center; gap: 0.6rem; }
+.time-input {
+    width: 110px;
+    padding: 0.65rem 0.8rem;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: white;
+    font-size: 0.95rem;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+.time-input:focus { outline: none; border-color: rgba(67,97,238,0.6); }
+.time-unit { font-size: 0.9rem; color: rgba(255,255,255,0.4); }
+.time-hint {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.3);
+    line-height: 1.5;
+}
+
 .count-slider {
     width: 100%;
     margin: 0.5rem 0 0.25rem;
@@ -1360,6 +1382,7 @@ h2 { color: #111; margin-bottom: 1.5rem; font-size: 1.6rem; }
 .qchip.active { background: rgba(67,97,238,0.2); border-color: rgba(67,97,238,0.6); }
 .qchip-num { font-size: 0.72rem; font-weight: 700; color: white; line-height: 1; }
 .qchip-type { font-size: 0.58rem; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 0.04em; }
+.qchip-time { font-size: 0.58rem; color: rgba(147,197,253,0.75); letter-spacing: 0.03em; }
 .qchip.active .qchip-type { color: #93c5fd; }
 .qchip-add { color: rgba(255,255,255,0.4); padding: 0.35rem 0.75rem; }
 .qchip-add:hover { color: white; border-color: rgba(255,255,255,0.25); }
@@ -1427,6 +1450,29 @@ h2 { color: #111; margin-bottom: 1.5rem; font-size: 1.6rem; }
 }
 .qp-type-btn:hover { color: rgba(255,255,255,0.8); }
 .qp-type-btn.active { background: rgba(67,97,238,0.18); border-color: rgba(67,97,238,0.55); color: white; }
+
+/* Per-question time */
+.qp-time-row { display: flex; align-items: center; gap: 0.6rem; }
+.qp-time-input {
+    width: 100px; padding: 0.6rem 0.75rem;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; color: white;
+    font-size: 0.95rem; font-family: inherit;
+    transition: border-color 0.2s, color 0.2s;
+}
+.qp-time-input:focus { outline: none; border-color: rgba(67,97,238,0.6); }
+/* Dimmed while showing the inherited set default rather than an override */
+.qp-time-input.is-default { color: rgba(255,255,255,0.45); }
+.qp-time-unit { font-size: 0.85rem; color: rgba(255,255,255,0.4); }
+.qp-time-reset {
+    margin-left: auto; padding: 0.4rem 0.7rem;
+    background: none; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 7px; color: rgba(255,255,255,0.45);
+    font-size: 0.78rem; font-family: inherit; cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+.qp-time-reset:hover { color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.28); }
 
 /* Choices */
 .choices-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
