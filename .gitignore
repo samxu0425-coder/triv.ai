@@ -3,3 +3,6 @@ users.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local dev-mode storage (Firestore is used in production)
+saved_sets.json
