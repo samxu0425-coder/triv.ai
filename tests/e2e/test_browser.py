@@ -9,7 +9,7 @@ import pytest
 from playwright.sync_api import expect
 from werkzeug.serving import make_server
 
-from conftest import MCQ, MULTI
+from conftest import FRQ, MCQ, MULTI
 
 pytestmark = pytest.mark.e2e
 
@@ -99,8 +99,10 @@ def test_host_and_player_play_a_full_game(live_server, new_page, trivia, monkeyp
 
     # Host reveals, then advances past the last question → game over for everyone
     host.locator('#skipBtn').click()
+    expect(host.locator('#answerFeedback')).to_have_text('Correct: Paris')
     host.locator('#nextBtn').click()
     for page in (host, player):
+        expect(page.locator('#endScores .end-score-row')).to_have_count(1)  # host isn't ranked
         expect(page.locator('#endOverlay')).to_be_visible()
         first_place = page.locator('#endScores .end-score-row').first
         expect(first_place).to_contain_text('Alice')
@@ -138,6 +140,9 @@ def test_editor_blocks_incomplete_questions_then_saves(live_server, new_page, tr
     register(host, live_server, 'builder')
     code = create_game(host, live_server)
     host.goto(f'{live_server}/room/{code}/build')
+
+    header_bg = host.locator('.editor-header').evaluate('el => getComputedStyle(el).backgroundColor')
+    assert header_bg.startswith('rgb('), f'sticky header must be opaque, got {header_bg}'
 
     host.locator('.editor-add-first-btn').click()
     host.fill('#qpText', 'Largest planet?')
@@ -194,3 +199,75 @@ def test_editing_saved_set_shows_existing_answers(live_server, new_page, trivia)
     assert selected == [0, 2, 3]  # Red, Blue, Yellow
     expect(host.locator('#qpTime')).to_have_value('30')               # falls back to set default
     assert host.js_errors == []
+
+
+def test_frq_reveal_shows_grade_and_lets_host_continue(live_server, new_page, trivia, monkeypatch):
+    """Regression: revealAnswer read an out-of-scope `state`, so every FRQ reveal crashed the page."""
+    monkeypatch.setattr(trivia, 'call_ai', lambda *args: [dict(FRQ), dict(MCQ)])
+    monkeypatch.setattr(trivia, 'grade_frq_answer', lambda q, a: {'score_pct': 75, 'triggered': ['Minor typo']})
+    host = new_page()
+    register(host, live_server, 'quizmaster')
+    code = create_game(host, live_server)
+    host.locator('textarea[name="topic"]').fill('Literature')
+    host.locator('#generateBtn').click()
+    host.wait_for_url('**/lobby')
+
+    player = new_page()
+    player.goto(f'{live_server}/play')
+    player.fill('#code', code)
+    player.fill('#display_name', 'Cara')
+    player.get_by_role('button', name='Join Game').click()
+    player.wait_for_url('**/lobby')
+    host.get_by_role('button', name='Start Game').click()
+    player.wait_for_url('**/game')
+
+    player.fill('#frqInput', 'Shakespear')
+    player.locator('#frqSubmit').click()
+    expect(player.locator('#answerFeedback')).to_contain_text('score revealed when time is up')
+
+    host.locator('#skipBtn').click()
+    expect(host.locator('#nextBtn')).to_be_visible()
+    expect(host.locator('#nextBtn')).to_have_text('Next Question')
+    expect(player.locator('#answerFeedback')).to_contain_text('Expected: Shakespeare')
+    expect(player.locator('#answerFeedback')).to_contain_text('(75%)')
+    expect(player.locator('#answerFeedback')).to_contain_text('Minor typo')
+
+    host.locator('#nextBtn').click()
+    expect(player.locator('#questionText')).to_have_text('Capital of France?')
+    assert host.js_errors == [] and player.js_errors == []
+
+
+def test_names_and_choices_are_shown_as_text_not_html(live_server, new_page, trivia, monkeypatch):
+    """A player name or AI-written choice containing HTML must never run as code."""
+    sneaky = '<img src=x onerror="window.__xss=1">'
+    monkeypatch.setattr(trivia, 'call_ai', lambda *args: [{
+        'question': 'Pick one', 'type': 'mcq',
+        'choices': [sneaky, '<b>bold</b>', 'C', 'D'], 'answer': 'C'}])
+    host = new_page()
+    register(host, live_server, 'quizmaster')
+    code = create_game(host, live_server)
+    host.locator('textarea[name="topic"]').fill('anything')
+    host.locator('#generateBtn').click()
+    host.wait_for_url('**/lobby')
+
+    player = new_page()
+    player.goto(f'{live_server}/play')
+    player.fill('#code', code)
+    player.fill('#display_name', sneaky)
+    player.get_by_role('button', name='Join Game').click()
+    player.wait_for_url('**/lobby')
+
+    expect(host.locator('#player-list')).to_contain_text(sneaky)   # rendered by lobby polling
+    host.get_by_role('button', name='Start Game').click()
+    player.wait_for_url('**/game')
+    expect(player.locator('#mcqChoices .choice-btn').first).to_contain_text(sneaky)
+    expect(player.locator('#mcqChoices .choice-btn').nth(1)).to_contain_text('<b>bold</b>')
+
+    player.locator('#mcqChoices .choice-btn', has_text='C').last.click()
+    expect(host.locator('#scoreList')).to_contain_text(sneaky)
+    host.once('dialog', lambda d: d.accept())   # "End the game now?"
+    host.locator('#endEarlyBtn').click()
+    expect(host.locator('#endScores')).to_contain_text(sneaky)
+
+    for page in (host, player):
+        assert page.evaluate('window.__xss') is None

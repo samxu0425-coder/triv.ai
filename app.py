@@ -772,7 +772,7 @@ def start_game(code):
     room['status'] = 'active'
     room['current_q'] = 0
     room['q_start_time'] = time.time()
-    room['scores'] = {p['id']: 0 for p in room['players']}
+    room['scores'] = {p['id']: 0 for p in room['players'] if not p.get('is_host')}
     # Keyed by question index as a string — Firestore can't address list
     # elements by position, and per-field writes are what keep concurrent
     # answers from clobbering each other.
@@ -873,7 +873,7 @@ def room_state(code):
         'my_frq_grade': my_frq_grade,
         'scores': _scores_list(room),
         'answers_in': len(answers_for_q) if q else 0,
-        'total_players': len(room['players']),
+        'total_players': sum(1 for p in room['players'] if not p.get('is_host')),
     }
 
     if q:
@@ -952,6 +952,8 @@ def submit_answer(code):
     player_id = session.get('user_id') or session.get('guest_id', '')
     if not player_id:
         return jsonify({'error': 'Not in game'}), 401
+    if player_id == room['host_id']:
+        return jsonify({'error': "The host can't answer"}), 403
 
     current_q = room['current_q']
     if room.get('answers', {}).get(str(current_q), {}).get(player_id) is not None:
@@ -962,10 +964,14 @@ def submit_answer(code):
     # expired question that nobody has polled yet is still closed.
     if room.get('revealed'):
         return jsonify({'error': 'Question closed'}), 400
-    if not room.get('paused'):
+    # The clock stops while paused, for both the deadline and speed scoring.
+    if room.get('paused'):
+        elapsed = room.get('paused_elapsed', 0)
+    else:
         elapsed = time.time() - room.get('q_start_time', time.time())
-        if elapsed > question_time(room, current_q):
-            return jsonify({'error': 'Time is up'}), 400
+    q_time = question_time(room, current_q)
+    if elapsed > q_time:
+        return jsonify({'error': 'Time is up'}), 400
 
     data = request.get_json(silent=True) or {}
     answer = data.get('answer')
@@ -974,7 +980,7 @@ def submit_answer(code):
 
     q = room['questions'][current_q]
     correct = q['answer']
-    base_points = speed_points(time.time() - room['q_start_time'], question_time(room, current_q))
+    base_points = speed_points(elapsed, q_time)
 
     # Work out the outcome before opening a transaction — FRQ grading is a
     # network call and must not be held open (or retried) inside one.

@@ -66,12 +66,17 @@ document.querySelectorAll('.player-avatar[data-index]').forEach(el => {
     el.style.background = COLORS[parseInt(el.dataset.index) % COLORS.length];
 });
 
+function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                          .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 function renderPlayers(players) {
     document.getElementById('player-count').textContent = players.length;
     document.getElementById('player-list').innerHTML = players.map((p, i) => `
         <li class="player-item">
-            <div class="player-avatar" style="background:${COLORS[i % COLORS.length]}">${p.name[0].toUpperCase()}</div>
-            <span class="player-name">${p.name}</span>
+            <div class="player-avatar" style="background:${COLORS[i % COLORS.length]}">${esc(p.name[0].toUpperCase())}</div>
+            <span class="player-name">${esc(p.name)}</span>
             ${p.is_host ? '<span class="host-badge">Host</span>' : ''}
         </li>
     `).join('');

@@ -192,7 +192,7 @@ def test_start_initialises_game_state(room, start_game):
     start_game(room, [MCQ, FRQ])
     assert room['status'] == 'active'
     assert room['current_q'] == 0
-    assert room['scores'] == {'host1': 0, 'guest1': 0}
+    assert room['scores'] == {'guest1': 0}   # the host doesn't play
     assert room['answers'] == {'0': {}, '1': {}}
     assert room['grades'] == {'0': {}, '1': {}}
 
@@ -251,6 +251,28 @@ def test_frq_points_are_speed_times_grade(room, start_game, clock, trivia, monke
     room['revealed'] = True
     assert state(player, room['code'])['my_frq_grade'] == {
         'score_pct': 50, 'points': 400, 'triggered': ['Incomplete']}
+
+
+def test_host_cannot_answer(room, start_game, client):
+    start_game(room, [MCQ])
+    resp = answer(client, room['code'], 'Paris')
+    assert resp.status_code == 403
+    assert 'host1' not in room['scores']
+
+
+def test_leaderboard_excludes_host(room, start_game, client):
+    player = start_game(room, [MCQ])
+    answer(player, room['code'], 'Rome')
+    names = [row['name'] for row in state(client, room['code'])['scores']]
+    assert names == ['Player']
+
+
+def test_paused_time_does_not_count_against_players(room, start_game, client, clock):
+    player = start_game(room, [MCQ])
+    clock.advance(5)
+    client.post(f"/room/{room['code']}/pause")
+    clock.advance(60)   # long pause: would be past the 20s deadline if the clock kept running
+    assert answer(player, room['code'], 'Paris').get_json() == {'correct': True, 'points': 800}
 
 
 def test_cannot_answer_twice(room, start_game):
@@ -346,7 +368,7 @@ def test_state_counts_answers_in(room, start_game):
     player = start_game(room, [MCQ])
     answer(player, room['code'], 'Paris')
     s = state(player, room['code'])
-    assert s['answers_in'] == 1 and s['total_players'] == 2 and s['my_answer'] == 'Paris'
+    assert s['answers_in'] == 1 and s['total_players'] == 1 and s['my_answer'] == 'Paris'
 
 
 def test_pause_freezes_timer_and_resume_continues(room, start_game, client, clock):

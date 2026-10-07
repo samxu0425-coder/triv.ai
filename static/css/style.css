@@ -1299,7 +1299,8 @@ h2 { color: #111; margin-bottom: 1.5rem; font-size: 1.6rem; }
 .editor-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 0.75rem 2rem;
-    background: rgba(0,0,0,0.35);
+    /* Opaque: the header is sticky, so a see-through one shows content scrolling under it */
+    background: #00050d;
     border-bottom: 1px solid rgba(255,255,255,0.08);
     position: sticky; top: 0; z-index: 50;
     gap: 1rem;
