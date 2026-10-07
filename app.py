@@ -234,6 +234,15 @@ def question_time(room, idx=None):
             return clamp_q_time(override)
     return clamp_q_time(room.get('settings', {}).get('time_per_q'))
 
+
+MAX_PTS, MIN_PTS = 1000, 200
+
+
+def speed_points(elapsed, q_time=QUESTION_TIME):
+    """Points for a correct answer: MAX_PTS when instant, sliding linearly to MIN_PTS at the buzzer."""
+    time_ratio = min(1.0, max(0.0, (q_time - elapsed) / q_time))
+    return int(MIN_PTS + (MAX_PTS - MIN_PTS) * time_ratio)
+
 # ---------------------------------------------------------------------------
 # Saved question sets
 # ---------------------------------------------------------------------------
@@ -955,13 +964,7 @@ def submit_answer(code):
 
     q = room['questions'][current_q]
     correct = q['answer']
-    elapsed = time.time() - room['q_start_time']
-
-    # Points scale linearly from MAX_PTS (instant) down to MIN_PTS (last second)
-    MAX_PTS, MIN_PTS = 1000, 200
-    q_time      = question_time(room, current_q)
-    time_ratio  = max(0.0, (q_time - elapsed) / q_time)
-    base_points = int(MIN_PTS + (MAX_PTS - MIN_PTS) * time_ratio)
+    base_points = speed_points(time.time() - room['q_start_time'], question_time(room, current_q))
 
     # Work out the outcome before opening a transaction — FRQ grading is a
     # network call and must not be held open (or retried) inside one.
