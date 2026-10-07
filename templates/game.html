@@ -343,6 +343,10 @@
         fb.textContent   = data.correct ? `✓ Correct! +${data.points} pts` : '✗ Wrong!';
         fb.className     = 'answer-feedback ' + (data.correct ? 'fb-correct' : 'fb-wrong');
         fb.style.display = 'block';
+      } else if (data.error) {
+        fb.textContent   = `✗ ${data.error}`;
+        fb.className     = 'answer-feedback fb-wrong';
+        fb.style.display = 'block';
       }
     } catch (e) { console.error('submit error', e); }
   }

@@ -957,6 +957,16 @@ def submit_answer(code):
     if room.get('answers', {}).get(str(current_q), {}).get(player_id) is not None:
         return jsonify({'error': 'Already answered'}), 400
 
+    # Close the question once the answer is shown. /state only persists
+    # `revealed` when someone polls, so also check the clock directly: an
+    # expired question that nobody has polled yet is still closed.
+    if room.get('revealed'):
+        return jsonify({'error': 'Question closed'}), 400
+    if not room.get('paused'):
+        elapsed = time.time() - room.get('q_start_time', time.time())
+        if elapsed > question_time(room, current_q):
+            return jsonify({'error': 'Time is up'}), 400
+
     data = request.get_json(silent=True) or {}
     answer = data.get('answer')
     if answer is None:

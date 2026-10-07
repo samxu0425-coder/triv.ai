@@ -270,11 +270,33 @@ def test_answer_validation_errors(room, start_game, make_client):
     assert answer(player, room['code'], 'Paris').status_code == 400
 
 
-@pytest.mark.xfail(strict=True, reason='BUG: answers are still accepted after the correct answer is revealed')
 def test_cannot_answer_after_reveal(room, start_game, client):
     player = start_game(room, [MCQ])
     client.post(f"/room/{room['code']}/skip")
     assert answer(player, room['code'], 'Paris').status_code == 400
+
+
+def test_cannot_answer_after_timer_expires_even_if_nobody_polled(room, start_game, trivia, clock):
+    # `revealed` is only persisted when someone polls /state; the answer route
+    # must still close the question once the clock runs out.
+    player = start_game(room, [MCQ])
+    clock.advance(trivia.question_time(room, 0) + 1)
+    assert room.get('revealed') is not True
+    assert answer(player, room['code'], 'Paris').status_code == 400
+    assert room['scores'].get('guest1', 0) == 0
+
+
+def test_rejected_late_answer_is_not_recorded(room, start_game, client):
+    player = start_game(room, [MCQ])
+    client.post(f"/room/{room['code']}/skip")
+    answer(player, room['code'], 'Paris')
+    assert 'guest1' not in room['answers'].get('0', {})
+
+
+def test_can_still_answer_just_before_buzzer(room, start_game, trivia, clock):
+    player = start_game(room, [MCQ])
+    clock.advance(trivia.question_time(room, 0) - 0.5)
+    assert answer(player, room['code'], 'Paris').status_code == 200
 
 
 # ═══════════════════════════════════════════════════════════════════════════
