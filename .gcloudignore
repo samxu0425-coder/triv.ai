@@ -23,5 +23,9 @@ __pycache__/
 users.json
 saved_sets.json
 .DS_Store
-_test_editor.py
 CLAUDE.md
+# Tests and dev-only tooling never run in production
+tests/
+pytest.ini
+requirements-dev.txt
+.pytest_cache/
